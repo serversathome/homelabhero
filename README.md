@@ -121,6 +121,7 @@ auto-update runs it for you after each update.
     ├── bin/
     │   ├── hh                     control CLI (agent- and operator-facing)
     │   ├── hh-connect             privileged broker (runs as hhvault)
+    │   ├── hh-provision           key-only host registration (UI-safe add)
     │   └── hh-update              OS + Claude updater (run by cron / hh update)
     ├── templates/                 sudoers, systemd unit, cron job, cloudcli env
     └── ops/                       becomes ~hhagent/homelab-ops (git-backed)
