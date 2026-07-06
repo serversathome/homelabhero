@@ -1,0 +1,20 @@
+# Filled in by the installer, then written to /etc/systemd/system/homelab-cc.service
+[Unit]
+Description=HomelabHero Command Center (claudecodeui / CloudCLI)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hhagent
+WorkingDirectory=__AGENT_HOME__/homelab-ops
+EnvironmentFile=/etc/homelabhero/cloudcli.env
+Environment=HOME=__AGENT_HOME__
+Environment=PATH=__NODE_BIN__:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=__CLOUDCLI__
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

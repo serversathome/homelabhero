@@ -1,0 +1,348 @@
+#!/usr/bin/env bash
+#
+# hh - HomelabHero control CLI.
+#
+# Agent-safe (read-only, used by Claude): list, run, test, overview, inventory,
+#   scan, doctor.
+# Operator (need sudo, run from an admin shell): add-host, rm-host, update, login.
+#
+set -euo pipefail
+
+REG_DIR="/etc/homelabhero/hosts.d"
+VAULT_DIR="/etc/homelabhero/vault"
+VAULT_USER="hhvault"
+AGENT_USER="hhagent"
+BROKER="/usr/local/bin/hh-connect"
+UPDATER="/usr/local/bin/hh-update"
+UPDATE_LOG="/var/log/homelabhero-update.log"
+NAME_RE='^[A-Za-z0-9._-]+$'
+
+die() { printf 'hh: %s\n' "$*" >&2; exit 1; }
+ask() { local p="$1" d="${2:-}" a; if [ -n "$d" ]; then printf '%s [%s]: ' "$p" "$d" >/dev/tty; else printf '%s: ' "$p" >/dev/tty; fi; read -r a </dev/tty || true; echo "${a:-$d}"; }
+asksecret() { local p="$1" a; printf '%s: ' "$p" >/dev/tty; read -rs a </dev/tty || true; printf '\n' >/dev/tty; echo "$a"; }
+broker() { sudo -n -H -u "$VAULT_USER" "$BROKER" "$@"; }
+conf_get() { awk -F= -v k="$2" '$1==k{sub(/^[^=]*=/,"");gsub(/^[ "]+|[ "]+$/,"");print;exit}' "$1"; }
+
+usage() {
+  cat <<'EOF'
+HomelabHero
+
+  hh list                      registered hosts (no secrets)
+  hh run <alias> "<command>"   run a command on a host via the broker
+  hh test <alias>              connectivity check
+  hh overview                  read-only vitals sweep across all hosts
+  hh inventory [alias]         what is RUNNING (VMs, LXCs, containers, apps)
+                                 add --save to snapshot into inventory/
+  hh scan [cidr]               discover live hosts on the network (read-only)
+                                 add --add to pick and register them (operator)
+  hh doctor                    check the whole setup is healthy
+  hh provision <alias> <host> [port] [platform]
+                               register a host with a generated key (key-only,
+                               no password); prints the public key to install
+
+  hh add-host                  register a host (operator, needs sudo)
+  hh rm-host <alias>           remove a host and its credential
+  hh update                    update the OS + Claude now (operator, needs sudo)
+  hh login                     log Claude Code in as the agent user
+EOF
+}
+
+# Remote command snippets (Linux shells; kept free of dollar signs and nested
+# single quotes so they survive the trip through the broker to the remote shell).
+VITALS_NIX="uptime -p 2>/dev/null || uptime; free -h | grep -i '^Mem'; df -h / | tail -1"
+INV_PROXMOX="echo '# VMs'; qm list; echo; echo '# LXCs'; pct list; echo; echo '# Storage'; pvesm status"
+INV_TRUENAS="echo '# Pools'; zpool list; echo; echo '# Containers'; docker ps 2>/dev/null; echo; echo '# Apps'; midclt call app.query 2>/dev/null | head -c 3000; echo"
+INV_LINUX="echo '# Containers'; command -v docker >/dev/null 2>&1 && docker ps || echo '(no docker)'; echo; echo -n '# Running services: '; systemctl list-units --type=service --state=running --no-legend --no-pager 2>/dev/null | wc -l; echo; echo '# Libvirt'; command -v virsh >/dev/null 2>&1 && virsh list --all || echo '(no libvirt)'"
+
+# ---- read-only, agent-safe --------------------------------------------------
+
+cmd_list() {
+  shopt -s nullglob
+  local files=("$REG_DIR"/*.conf)
+  [ "${#files[@]}" -gt 0 ] || { echo "No hosts registered yet. Run: hh add-host"; return 0; }
+  printf '%-14s %-9s %-22s %-6s %-10s %s\n' ALIAS PLATFORM HOST PORT USER AUTH
+  for f in "${files[@]}"; do
+    local a; a="$(basename "$f" .conf)"
+    printf '%-14s %-9s %-22s %-6s %-10s %s\n' \
+      "$a" "$(conf_get "$f" PLATFORM)" "$(conf_get "$f" HOST)" \
+      "$(conf_get "$f" PORT)" "$(conf_get "$f" USER)" "$(conf_get "$f" AUTH)"
+  done
+}
+
+cmd_run() {
+  [ "$#" -ge 2 ] || die "usage: hh run <alias> \"<command>\""
+  local alias="$1"; shift
+  [[ "$alias" =~ $NAME_RE ]] || die "invalid alias"
+  exec sudo -n -H -u "$VAULT_USER" "$BROKER" "$alias" "$@"
+}
+
+cmd_test() {
+  [ "$#" -eq 1 ] || die "usage: hh test <alias>"
+  if broker "$1" 'echo homelabhero-ok' 2>/dev/null | grep -q homelabhero-ok; then
+    echo "OK: $1 reachable"
+  else
+    echo "FAIL: $1 not reachable (check registration, key authorization, mesh)"; return 1
+  fi
+}
+
+_platform_of() { conf_get "${REG_DIR}/$1.conf" PLATFORM; }
+
+cmd_overview() {
+  shopt -s nullglob
+  local files=("$REG_DIR"/*.conf)
+  [ "${#files[@]}" -gt 0 ] || { echo "No hosts registered. Run: hh add-host"; return 0; }
+  printf 'HomelabHero overview  %s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')"
+  for f in "${files[@]}"; do
+    local a plat; a="$(basename "$f" .conf)"; plat="$(conf_get "$f" PLATFORM)"
+    printf -- '---------------------------------------------\n## %s (%s)\n' "$a" "$plat"
+    if ! broker "$a" 'true' 2>/dev/null; then echo "  UNREACHABLE"; continue; fi
+    broker "$a" "$VITALS_NIX" 2>/dev/null | sed 's/^/  /' || true
+    [ "$plat" = "truenas" ] && { echo -n "  zpool: "; broker "$a" 'zpool status -x' 2>/dev/null; }
+  done
+  echo '---------------------------------------------'
+}
+
+_inventory_one() {
+  local a plat; a="$1"; plat="$(_platform_of "$a")"
+  printf -- '=============================================\n# %s (%s)\n' "$a" "$plat"
+  if ! broker "$a" 'true' 2>/dev/null; then echo "UNREACHABLE"; return; fi
+  case "$plat" in
+    proxmox) broker "$a" "$INV_PROXMOX" 2>/dev/null || true ;;
+    truenas) broker "$a" "$INV_TRUENAS" 2>/dev/null || true ;;
+    *)       broker "$a" "$INV_LINUX"   2>/dev/null || true ;;
+  esac
+}
+
+cmd_inventory() {
+  local save=0 one=""
+  for arg in "$@"; do case "$arg" in --save) save=1 ;; *) one="$arg" ;; esac; done
+  shopt -s nullglob
+  local aliases=()
+  if [ -n "$one" ]; then aliases=("$one"); else for f in "$REG_DIR"/*.conf; do aliases+=("$(basename "$f" .conf)"); done; fi
+  [ "${#aliases[@]}" -gt 0 ] || { echo "No hosts registered. Run: hh add-host"; return 0; }
+
+  local out; out="$(printf 'HomelabHero inventory  %s\n\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')")"$'\n'
+  for a in "${aliases[@]}"; do out+="$(_inventory_one "$a")"$'\n\n'; done
+  printf '%s' "$out"
+
+  if [ "$save" -eq 1 ]; then
+    local dir="${HOME}/homelab-ops/inventory"
+    if [ -d "$dir" ] && [ -w "$dir" ]; then
+      printf '%s' "$out" > "${dir}/latest.md"
+      echo "Saved snapshot to ${dir}/latest.md"
+    else
+      echo "(could not save: ${dir} not writable)" >&2
+    fi
+  fi
+}
+
+_registered_ips() { shopt -s nullglob; for f in "$REG_DIR"/*.conf; do conf_get "$f" HOST; done; }
+
+cmd_scan() {
+  local add=0 cidr=""
+  for arg in "$@"; do case "$arg" in --add) add=1 ;; *) cidr="$arg" ;; esac; done
+  [ -n "$cidr" ] || cidr="$(ip -o -f inet addr show scope global 2>/dev/null | awk '{print $4; exit}')"
+  [ -n "$cidr" ] || die "could not detect a subnet; pass one, e.g. hh scan 10.0.0.0/24"
+  echo "Scanning ${cidr} for management endpoints..." >&2
+
+  local ports="22,80,443,445,8006"
+  declare -a IPS PORTLIST
+  if command -v nmap >/dev/null 2>&1; then
+    while read -r ip openports; do
+      IPS+=("$ip"); PORTLIST+=("$openports")
+    done < <(nmap -Pn -T4 --open -p "$ports" -oG - "$cidr" 2>/dev/null \
+      | awk -F'\t' '/Ports:/{ip=$1; sub(/Host: /,"",ip); sub(/ .*/,"",ip);
+          p=$2; gsub(/Ports: /,"",p); gsub(/\/open[^,]*/,"",p); gsub(/,/,"",p); gsub(/ +/,",",p); sub(/^,/,"",p); print ip" "p}')
+  else
+    echo "(nmap not installed; slower basic scan. For better results: sudo apt install nmap)" >&2
+    local base="${cidr%/*}"; base="${base%.*}"
+    for n in $(seq 1 254); do
+      local ip="${base}.${n}" open=""
+      for p in 22 8006 443 445 80; do
+        timeout 1 bash -c "exec 3<>/dev/tcp/${ip}/${p}" 2>/dev/null && open="${open}${p} "
+      done
+      [ -n "$open" ] && { IPS+=("$ip"); PORTLIST+=("${open% }"); }
+    done
+  fi
+
+  local regips; regips="$(_registered_ips | tr '\n' ' ')"
+  printf '\n%-4s %-16s %-16s %-16s %s\n' '#' 'IP' 'OPEN PORTS' 'GUESS' 'REGISTERED?'
+  local i=0
+  for idx in "${!IPS[@]}"; do
+    i=$((i+1))
+    local ip="${IPS[$idx]}" op="${PORTLIST[$idx]}" guess reg="new"
+    case " ${op//,/ } " in
+      *" 8006 "*) guess="proxmox" ;;
+      *" 443 "*)  guess="truenas?/linux" ;;
+      *" 22 "*)   guess="linux" ;;
+      *)          guess="?" ;;
+    esac
+    case " $regips " in *" $ip "*) reg="registered" ;; esac
+    printf '%-4s %-16s %-16s %-16s %s\n' "$i" "$ip" "${op// /,}" "$guess" "$reg"
+  done
+  [ "$i" -gt 0 ] || { echo "No endpoints found."; return 0; }
+
+  if [ "$add" -eq 1 ]; then
+    echo
+    local pick; pick="$(ask 'Numbers to register (comma-separated, blank to skip)')"
+    IFS=',' read -ra nums <<<"$pick"
+    for n in "${nums[@]}"; do
+      n="${n// /}"; [[ "$n" =~ ^[0-9]+$ ]] || continue
+      local idx=$((n-1)); [ -n "${IPS[$idx]:-}" ] || continue
+      local ip="${IPS[$idx]}" op="${PORTLIST[$idx]}" plat=linux
+      case " ${op//,/ } " in *" 8006 "*) plat=proxmox ;; esac
+      echo; echo "Registering ${ip} ..."
+      cmd_add_host --host "$ip" --port 22 --platform "$plat"
+    done
+  else
+    echo; echo "To register: hh scan ${cidr} --add   (or: hh add-host)"
+  fi
+}
+
+cmd_doctor() {
+  local fail=0 warn=0
+  ok()   { printf '  [ok]   %s\n' "$*"; }
+  bad()  { printf '  [FAIL] %s\n' "$*"; fail=$((fail+1)); }
+  note() { printf '  [warn] %s\n' "$*"; warn=$((warn+1)); }
+
+  echo "HomelabHero doctor"
+  echo "Setup"
+  id "$AGENT_USER" >/dev/null 2>&1 && ok "agent user ${AGENT_USER} exists" || bad "missing user ${AGENT_USER}"
+  id "$VAULT_USER" >/dev/null 2>&1 && ok "vault user ${VAULT_USER} exists" || bad "missing user ${VAULT_USER}"
+  [ -x "$BROKER" ] && ok "broker installed" || bad "broker missing at ${BROKER}"
+  if [ -d "$VAULT_DIR" ]; then
+    local perm; perm="$(stat -c '%a %U' "$VAULT_DIR" 2>/dev/null || true)"
+    [ "$perm" = "700 ${VAULT_USER}" ] && ok "vault perms (${perm})" || note "vault perms are '${perm}', expected '700 ${VAULT_USER}'"
+  else bad "vault dir missing"; fi
+
+  echo "Runtime"
+  if systemctl is-active --quiet homelab-cc; then ok "service homelab-cc active"; else bad "service homelab-cc not active"; fi
+  local ahome cv
+  ahome="$(getent passwd "$AGENT_USER" | cut -d: -f6)"
+  cv="$(sudo -n -u "$AGENT_USER" -H bash -c "export NVM_DIR=\"${ahome}/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\" >/dev/null 2>&1; command -v claude >/dev/null && claude --version" 2>/dev/null | tail -1 || true)"
+  [ -n "$cv" ] && ok "claude: ${cv}" || note "could not read claude version here (fine if not run with sudo)"
+
+  echo "Hosts"
+  shopt -s nullglob
+  local files=("$REG_DIR"/*.conf)
+  [ "${#files[@]}" -eq 0 ] && note "no hosts registered yet (hh add-host)"
+  for f in "${files[@]}"; do
+    local a; a="$(basename "$f" .conf)"
+    if broker "$a" 'echo ok' 2>/dev/null | grep -q ok; then ok "reach ${a}"; else bad "cannot reach ${a}"; fi
+  done
+
+  echo "Auto-update"
+  if [ -f "$UPDATE_LOG" ]; then ok "last update log: $(tail -1 "$UPDATE_LOG" 2>/dev/null | cut -c1-70)"
+  else note "no update has run yet (${UPDATE_LOG} not present)"; fi
+
+  echo
+  if [ "$fail" -gt 0 ]; then echo "RESULT: ${fail} problem(s), ${warn} warning(s)."; return 1
+  else echo "RESULT: healthy (${warn} warning(s))."; fi
+}
+
+# ---- operator ---------------------------------------------------------------
+
+cmd_add_host() {
+  local alias="" host="" port="" plat="" ruser="" auth="" cred=""
+  while [ "$#" -gt 0 ]; do case "$1" in
+    --alias) alias="$2"; shift 2 ;;
+    --host) host="$2"; shift 2 ;;
+    --port) port="$2"; shift 2 ;;
+    --platform) plat="$2"; shift 2 ;;
+    *) shift ;;
+  esac; done
+
+  [ "$(id -u)" -eq 0 ] || sudo -v || die "add-host needs sudo (run from an admin shell, not the Claude UI)"
+  [ -n "$alias" ] || alias="$(ask 'Alias (short name, e.g. pve1)')"
+  [[ "$alias" =~ $NAME_RE ]] || die "invalid alias"
+  [ -f "${REG_DIR}/${alias}.conf" ] && die "alias already registered"
+  [ -n "$plat" ] || plat="$(ask 'Platform (linux/truenas/proxmox)' linux)"
+  [ -n "$host" ] || host="$(ask 'IP or hostname')"
+  [ -n "$port" ] || port="$(ask 'SSH port' 22)"
+  ruser="$(ask 'Username' root)"
+  auth="$(ask 'Auth method (key recommended / password)' key)"
+
+  case "$auth" in
+    key)
+      cred="${alias}.key"
+      echo "Generating a dedicated key in the vault..." >/dev/tty
+      sudo -u "$VAULT_USER" ssh-keygen -t ed25519 -N '' -q -f "${VAULT_DIR}/${cred}" -C "homelabhero-${alias}"
+      echo >/dev/tty; echo "Public key to authorize on ${host}:" >/dev/tty
+      sudo cat "${VAULT_DIR}/${cred}.pub" >/dev/tty; echo >/dev/tty
+      if [ "$(ask 'Install it now via ssh-copy-id? (needs the remote password once) (y/N)' N)" = "y" ]; then
+        sudo -u "$VAULT_USER" ssh-copy-id -i "${VAULT_DIR}/${cred}.pub" -p "$port" "${ruser}@${host}" </dev/tty || \
+          echo "ssh-copy-id did not complete; authorize the key manually." >/dev/tty
+      fi
+      ;;
+    password)
+      echo "WARNING: password auth is weaker and harder to isolate. Prefer keys." >/dev/tty
+      cred="${alias}.pw"
+      local pw; pw="$(asksecret "Password for ${ruser}@${host}")"
+      printf '%s' "$pw" | sudo -u "$VAULT_USER" tee "${VAULT_DIR}/${cred}" >/dev/null
+      sudo -u "$VAULT_USER" chmod 600 "${VAULT_DIR}/${cred}"; unset pw
+      ;;
+    *) die "unknown auth method" ;;
+  esac
+
+  sudo tee "${REG_DIR}/${alias}.conf" >/dev/null <<EOF
+# HomelabHero host registry entry (non-secret)
+PLATFORM=${plat}
+HOST=${host}
+PORT=${port}
+USER=${ruser}
+AUTH=${auth}
+CRED=${cred}
+EOF
+  sudo chmod 644 "${REG_DIR}/${alias}.conf"
+  echo "Registered '${alias}'. Testing..." >/dev/tty
+  cmd_test "$alias" || true
+}
+
+cmd_rm_host() {
+  [ "$#" -eq 1 ] || die "usage: hh rm-host <alias>"
+  local f="${REG_DIR}/$1.conf"; [ -f "$f" ] || die "no such host"
+  local cred; cred="$(conf_get "$f" CRED)"
+  sudo rm -f "$f"
+  [ -n "$cred" ] && sudo -u "$VAULT_USER" rm -f "${VAULT_DIR}/${cred}" "${VAULT_DIR}/${cred}.pub" 2>/dev/null || true
+  echo "Removed $1"
+}
+
+cmd_update() {
+  [ -x "$UPDATER" ] || die "updater not installed at ${UPDATER}"
+  echo "Running the OS + Claude update now (you will be asked for sudo)..."
+  sudo "$UPDATER"
+}
+
+cmd_provision() {
+  [ "$#" -ge 2 ] || die "usage: hh provision <alias> <host> [port] [platform]"
+  exec sudo -n -u "$VAULT_USER" /usr/local/bin/hh-provision "$@"
+}
+
+cmd_login() {
+  local ahome; ahome="$(getent passwd "$AGENT_USER" | cut -d: -f6)"
+  echo "Starting Claude Code as ${AGENT_USER}. Run /login inside, then type /exit." >/dev/tty
+  # Force HOME to the agent's home (do not rely on sudo -i) and load nvm so the
+  # claude binary is on PATH. Otherwise claude reads root's ~/.claude and fails.
+  sudo -u "$AGENT_USER" -H bash -c "export HOME='${ahome}'; export NVM_DIR=\"\$HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\"; cd \"\$HOME\"; exec claude"
+}
+
+main() {
+  local sub="${1:-}"; shift || true
+  case "$sub" in
+    list)      cmd_list "$@" ;;
+    run)       cmd_run "$@" ;;
+    test)      cmd_test "$@" ;;
+    overview)  cmd_overview "$@" ;;
+    inventory) cmd_inventory "$@" ;;
+    scan)      cmd_scan "$@" ;;
+    doctor)    cmd_doctor "$@" ;;
+    provision) cmd_provision "$@" ;;
+    add-host)  cmd_add_host "$@" ;;
+    rm-host)   cmd_rm_host "$@" ;;
+    update)    cmd_update "$@" ;;
+    login)     cmd_login "$@" ;;
+    ''|-h|--help|help) usage ;;
+    *) die "unknown command: ${sub} (try: hh help)" ;;
+  esac
+}
+main "$@"

@@ -1,0 +1,48 @@
+{
+  "permissions": {
+    "defaultMode": "default",
+    "allow": [
+      "Read",
+      "Grep",
+      "Glob",
+      "Bash(hh list)",
+      "Bash(hh list:*)",
+      "Bash(hh overview)",
+      "Bash(hh inventory)",
+      "Bash(hh inventory:*)",
+      "Bash(hh test:*)",
+      "Bash(hh scan)",
+      "Bash(hh scan:*)",
+      "Bash(hh doctor)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(cd:*)",
+      "Bash(pwd)",
+      "Bash(echo:*)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(ping:*)",
+      "Bash(dig:*)",
+      "Bash(nc:*)"
+    ],
+    "deny": [
+      "Bash(ssh:*)",
+      "Bash(scp:*)",
+      "Bash(sudo:*)",
+      "Bash(hh update)",
+      "Bash(hh add-host:*)",
+      "Bash(hh rm-host:*)",
+      "Bash(cat /etc/homelabhero/vault/*)",
+      "Read(/etc/homelabhero/vault/**)",
+      "Read(~/.ssh/id_*)",
+      "Bash(rm -rf:*)",
+      "Bash(dd:*)",
+      "Bash(mkfs:*)",
+      "Bash(wipefs:*)",
+      "Bash(shutdown:*)",
+      "Bash(reboot)",
+      "Bash(halt)"
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+# Secrets and machine-local config: never commit
+.homelab.env
+secrets/
+*.key
+*.pem
+id_*
+
+# Claude Code local state (sessions, auth) lives in ~/.claude, not here,
+# but ignore any local settings overrides if you add them
+.claude/settings.local.json

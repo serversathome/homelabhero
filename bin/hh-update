@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+#
+# hh-update - update the OS packages and Claude, restart the UI, and run a
+# health check. Run as root (the weekly cron job calls it, and `hh update`
+# invokes it via sudo). Deliberately does NOT use `set -e`: if one step has a
+# hiccup we still want the rest to run and the log to be complete.
+#
+set -uo pipefail
+export DEBIAN_FRONTEND=noninteractive
+AGENT_USER="hhagent"
+
+echo "=================================================="
+echo "HomelabHero update starting: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+
+echo "--- OS packages"
+apt-get update -y
+apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade
+apt-get -y autoremove --purge
+
+echo "--- Claude Code + claudecodeui"
+runuser -l "$AGENT_USER" -c '
+  export NVM_DIR="$HOME/.nvm"
+  [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+  npm -g update @anthropic-ai/claude-code @cloudcli-ai/cloudcli
+' || echo "npm update reported an issue (continuing)"
+
+echo "--- Restarting the command center"
+systemctl restart homelab-cc
+
+echo "--- Health check"
+/usr/local/bin/hh doctor || echo "doctor reported problems (see above)"
+
+if [ -f /var/run/reboot-required ]; then
+  echo "NOTE: a reboot is required to finish these OS updates. Reboot when convenient."
+fi
+
+echo "HomelabHero update done: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+echo "=================================================="

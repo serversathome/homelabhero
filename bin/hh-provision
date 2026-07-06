@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+#
+# hh-provision - register a host with a freshly generated key, safe to invoke
+# from the UI (i.e. by the agent). Runs as the vault user via a narrow sudoers
+# rule. It handles NO secrets: it generates a keypair in the vault (the private
+# half never leaves it) and prints only the PUBLIC key for the user to install
+# on the target. Password auth is intentionally not supported here; that stays
+# in the shell-only `hh add-host`.
+#
+# Usage: hh-provision <alias> <host> [port] [platform]
+#
+set -euo pipefail
+
+REG_DIR="/etc/homelabhero/hosts.d"
+VAULT_DIR="/etc/homelabhero/vault"
+NAME_RE='^[A-Za-z0-9._-]+$'
+HOST_RE='^[A-Za-z0-9._:-]+$'
+
+die() { printf 'hh-provision: %s\n' "$*" >&2; exit 2; }
+
+[ "$#" -ge 2 ] || die "usage: hh-provision <alias> <host> [port] [platform]"
+ALIAS="$1"; HOST="$2"; PORT="${3:-22}"; PLAT="${4:-linux}"
+
+[[ "$ALIAS" =~ $NAME_RE ]] || die "invalid alias"
+[[ "$HOST"  =~ $HOST_RE ]] || die "invalid host"
+[[ "$PORT"  =~ ^[0-9]+$  ]] || die "invalid port"
+case "$PLAT" in linux|truenas|proxmox) : ;; *) die "platform must be linux, truenas, or proxmox" ;; esac
+[ -e "${REG_DIR}/${ALIAS}.conf" ] && die "alias '${ALIAS}' already registered"
+
+CRED="${ALIAS}.key"
+[ -e "${VAULT_DIR}/${CRED}" ] && die "a credential for '${ALIAS}' already exists"
+
+# Generate the keypair in the vault (runs as vault user, so it lands owned by it).
+ssh-keygen -t ed25519 -N '' -q -f "${VAULT_DIR}/${CRED}" -C "homelabhero-${ALIAS}"
+
+# Write the non-secret registry entry.
+umask 022
+cat > "${REG_DIR}/${ALIAS}.conf" <<EOF
+# HomelabHero host registry entry (non-secret)
+PLATFORM=${PLAT}
+HOST=${HOST}
+PORT=${PORT}
+USER=root
+AUTH=key
+CRED=${CRED}
+EOF
+
+# Emit a clear block: confirmation plus the PUBLIC key to install on the target.
+echo "REGISTERED ${ALIAS} (${PLAT}) at ${HOST}:${PORT} as root, key auth."
+echo "PUBLIC_KEY_BEGIN"
+cat "${VAULT_DIR}/${CRED}.pub"
+echo "PUBLIC_KEY_END"

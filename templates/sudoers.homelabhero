@@ -1,0 +1,7 @@
+# HomelabHero: the low-privilege agent user may run ONLY these two helpers, and
+# ONLY as the vault user. hh-connect opens connections; hh-provision registers a
+# host with a generated key. Neither exposes any secret. Installed to
+# /etc/sudoers.d/homelabhero (mode 0440), validated by visudo.
+Cmnd_Alias HH_BROKER    = /usr/local/bin/hh-connect
+Cmnd_Alias HH_PROVISION = /usr/local/bin/hh-provision
+hhagent ALL=(hhvault) NOPASSWD: HH_BROKER, HH_PROVISION

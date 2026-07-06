@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+#
+# hh-connect - HomelabHero privileged connection broker.
+#
+# Runs as the vault user (hhvault) via a narrow sudoers rule. It is the ONLY
+# thing the agent user may run as hhvault. It resolves a registered host alias
+# to its connection details, reads the matching credential from the vault (which
+# the agent user cannot read), and opens the connection. It never prints, echoes,
+# or returns credential material.
+#
+# Usage: hh-connect <alias> <remote command...>
+#
+set -euo pipefail
+
+REG_DIR="/etc/homelabhero/hosts.d"
+VAULT_DIR="/etc/homelabhero/vault"
+NAME_RE='^[A-Za-z0-9._-]+$'
+
+die() { printf 'hh-connect: %s\n' "$*" >&2; exit 2; }
+
+[ "$#" -ge 2 ] || die "usage: hh-connect <alias> <command...>"
+ALIAS="$1"; shift
+
+# Validate the alias hard. No path traversal, no surprises.
+[[ "$ALIAS" =~ $NAME_RE ]] || die "invalid alias"
+
+CONF="${REG_DIR}/${ALIAS}.conf"
+[ -f "$CONF" ] || die "no such registered host: ${ALIAS}"
+
+# Parse the registry file safely (no sourcing). Only known keys are accepted.
+PLATFORM=""; HOST=""; PORT="22"; RUSER=""; AUTH=""; CRED=""
+while IFS='=' read -r key val; do
+  key="${key//[[:space:]]/}"
+  # strip surrounding quotes/space from value
+  val="${val%\"}"; val="${val#\"}"; val="${val## }"; val="${val%% }"
+  case "$key" in
+    PLATFORM) PLATFORM="$val" ;;
+    HOST)     HOST="$val" ;;
+    PORT)     PORT="$val" ;;
+    USER)     RUSER="$val" ;;
+    AUTH)     AUTH="$val" ;;
+    CRED)     CRED="$val" ;;
+    ''|\#*)   : ;;
+  esac
+done < "$CONF"
+
+[ -n "$HOST" ] || die "registry entry missing HOST"
+[ -n "$RUSER" ] || die "registry entry missing USER"
+[ -n "$CRED" ] || die "registry entry missing CRED"
+[[ "$PORT" =~ ^[0-9]+$ ]] || die "invalid PORT"
+[[ "$CRED" =~ $NAME_RE ]] || die "invalid credential reference"
+
+# Never let the broker be turned inward on this machine (which is where the
+# vault lives). Loopback and localhost targets are refused.
+case "$HOST" in
+  127.*|::1|localhost|localhost.*) die "refusing loopback target" ;;
+esac
+
+CREDFILE="${VAULT_DIR}/${CRED}"
+[ -f "$CREDFILE" ] || die "credential not found in vault"
+# Confirm the credential really lives inside the vault dir (defense in depth).
+case "$(readlink -f "$CREDFILE")" in
+  "${VAULT_DIR}/"*) : ;;
+  *) die "credential path escapes vault" ;;
+esac
+
+# Options shared by both auth types.
+SSH_COMMON=(-p "$PORT"
+  -o StrictHostKeyChecking=accept-new
+  -o ConnectTimeout=8
+  -o LogLevel=ERROR)
+
+case "$AUTH" in
+  key)
+    # Key auth is non-interactive: BatchMode fails fast instead of hanging on a
+    # password prompt, and we allow only pubkey.
+    exec ssh -i "$CREDFILE" \
+      -o BatchMode=yes \
+      -o PreferredAuthentications=publickey \
+      -o PasswordAuthentication=no \
+      "${SSH_COMMON[@]}" "${RUSER}@${HOST}" -- "$@"
+    ;;
+  password)
+    command -v sshpass >/dev/null || die "sshpass not installed (needed for password auth)"
+    # BatchMode=yes would disable password auth entirely, so it must NOT be set
+    # here. sshpass supplies the password to the interactive prompt.
+    exec sshpass -f "$CREDFILE" ssh \
+      -o PreferredAuthentications=password \
+      -o PubkeyAuthentication=no \
+      "${SSH_COMMON[@]}" "${RUSER}@${HOST}" -- "$@"
+    ;;
+  *)
+    die "unknown AUTH type: ${AUTH}"
+    ;;
+esac

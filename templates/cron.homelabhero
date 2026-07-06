@@ -1,0 +1,10 @@
+# HomelabHero weekly auto-update.
+# Updates the OS packages and Claude, restarts the command center, and runs a
+# health check. Output is appended to /var/log/homelabhero-update.log so you can
+# always see what happened:  tail /var/log/homelabhero-update.log
+#
+# The five time fields are: minute hour day-of-month month day-of-week.
+# Default below = every Sunday at 04:00. Edit the line to change the schedule,
+# or delete this file to turn auto-update off entirely.
+
+0 4 * * 0 root /usr/local/bin/hh-update >> /var/log/homelabhero-update.log 2>&1
