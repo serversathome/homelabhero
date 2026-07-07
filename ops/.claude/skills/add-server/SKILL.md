@@ -61,28 +61,16 @@ target themselves.
    `OK` means it's connected and ready. If it still fails, the key isn't on the
    target yet, or SSH/key auth is disabled there.
 
-5. Grant passwordless sudo (skip if the connect user is root). HomelabHero is a
-   full controller, so a non-root connect user needs passwordless sudo or
-   privileged commands (docker, smartctl, zpool, apt...) fail. Confirm this is
-   what the user wants (it gives the agent full root on that host), then:
-
-   - TrueNAS (`truenas_admin`): the middleware works without sudo, so you can do
-     it directly. Find the user id and grant it:
-
-         hh run <alias> "midclt call user.query '[[\"username\",\"=\",\"truenas_admin\"]]' | python3 -c 'import json,sys;print(json.load(sys.stdin)[0][\"id\"])'"
-         hh run <alias> "midclt call user.update <id> '{\"sudo_commands_nopasswd\": [\"ALL\"], \"sudo_commands\": []}'"
-
-     (Or in the UI: Credentials -> Users -> truenas_admin -> Edit -> "Allow all
-     sudo commands with no password".)
-   - Linux / non-root Proxmox: this needs root once, so the broker cannot do it.
-     Ask the operator to run, from a root/admin shell on that box:
-
-         echo '<user> ALL=(ALL) NOPASSWD: ALL' | sudo tee /etc/sudoers.d/homelabhero-<user> && sudo chmod 440 /etc/sudoers.d/homelabhero-<user>
-
-6. Show it landed and confirm the privilege is in place:
+5. Show it landed:
 
        hh list
-       hh doctor        # should report "<alias> (<user>, passwordless sudo OK)"
+       hh doctor
+
+   A **root** connect user (the common case) needs nothing further - it runs every
+   command directly. A **non-root** user (e.g. TrueNAS `truenas_admin`) needs
+   passwordless sudo for privileged commands (docker, smartctl, zpool...) to work;
+   `hh doctor` flags any host missing it. On TrueNAS the middleware (`midclt`)
+   works without sudo and covers most tasks regardless.
 
 ## Important
 
