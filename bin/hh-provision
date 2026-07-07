@@ -7,7 +7,11 @@
 # on the target. Password auth is intentionally not supported here; that stays
 # in the shell-only `hh add-host`.
 #
-# Usage: hh-provision <alias> <host> [port] [platform]
+# Usage: hh-provision <alias> <host> [port] [platform] [user]
+#
+# The connect user defaults per platform (truenas -> truenas_admin, since modern
+# TrueNAS disables root SSH; everything else -> root). Override it with a fifth
+# argument or by passing user@host as the host.
 #
 set -euo pipefail
 
@@ -18,11 +22,21 @@ HOST_RE='^[A-Za-z0-9._:-]+$'
 
 die() { printf 'hh-provision: %s\n' "$*" >&2; exit 2; }
 
-[ "$#" -ge 2 ] || die "usage: hh-provision <alias> <host> [port] [platform]"
-ALIAS="$1"; HOST="$2"; PORT="${3:-22}"; PLAT="${4:-linux}"
+[ "$#" -ge 2 ] || die "usage: hh-provision <alias> <host> [port] [platform] [user]"
+ALIAS="$1"; HOST="$2"; PORT="${3:-22}"; PLAT="${4:-linux}"; RUSER="${5:-}"
+
+# Convenience: allow user@host in the host argument (ssh-style). It wins over a
+# fifth-arg user if both are somehow given.
+case "$HOST" in *@*) RUSER="${HOST%@*}"; HOST="${HOST#*@}" ;; esac
+
+# No user specified anywhere: pick a sensible default for the platform.
+if [ -z "$RUSER" ]; then
+  case "$PLAT" in truenas) RUSER="truenas_admin" ;; *) RUSER="root" ;; esac
+fi
 
 [[ "$ALIAS" =~ $NAME_RE ]] || die "invalid alias"
 [[ "$HOST"  =~ $HOST_RE ]] || die "invalid host"
+[[ "$RUSER" =~ $NAME_RE ]] || die "invalid user"
 [[ "$PORT"  =~ ^[0-9]+$  ]] || die "invalid port"
 case "$PLAT" in linux|truenas|proxmox) : ;; *) die "platform must be linux, truenas, or proxmox" ;; esac
 [ -e "${REG_DIR}/${ALIAS}.conf" ] && die "alias '${ALIAS}' already registered"
@@ -40,18 +54,18 @@ cat > "${REG_DIR}/${ALIAS}.conf" <<EOF
 PLATFORM=${PLAT}
 HOST=${HOST}
 PORT=${PORT}
-USER=root
+USER=${RUSER}
 AUTH=key
 CRED=${CRED}
 EOF
 
 # Record the registration in the same broker audit log (best-effort).
 printf '%s\t%s\tPROVISION\t%s@%s:%s (%s)\n' \
-  "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$ALIAS" root "$HOST" "$PORT" "$PLAT" \
+  "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$ALIAS" "$RUSER" "$HOST" "$PORT" "$PLAT" \
   >>/var/log/homelabhero-broker.log 2>/dev/null || true
 
 # Emit a clear block: confirmation plus the PUBLIC key to install on the target.
-echo "REGISTERED ${ALIAS} (${PLAT}) at ${HOST}:${PORT} as root, key auth."
+echo "REGISTERED ${ALIAS} (${PLAT}) at ${HOST}:${PORT} as ${RUSER}, key auth."
 echo "PUBLIC_KEY_BEGIN"
 cat "${VAULT_DIR}/${CRED}.pub"
 echo "PUBLIC_KEY_END"

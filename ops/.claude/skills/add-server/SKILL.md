@@ -19,24 +19,40 @@ target themselves.
 
 ## Steps
 
-1. Gather three things from the user: a short alias (e.g. `pve1`), the IP or
-   hostname, and the platform (`linux`, `truenas`, or `proxmox`). Assume SSH
-   port 22 unless they say otherwise. Confirm them back briefly.
+1. Gather from the user: a short alias (e.g. `pve1`), the IP or hostname, the
+   platform (`linux`, `truenas`, or `proxmox`), and the SSH login user. Assume
+   SSH port 22 unless they say otherwise. Confirm them back briefly.
 
-2. Register and generate the key:
+   Pick the right connect user - this matters, get it wrong and the key auth
+   fails even though the key is installed:
+   - TrueNAS: `truenas_admin` (modern TrueNAS disables root SSH). This is the
+     default provision uses for truenas, so you can omit it.
+   - Proxmox: `root`.
+   - Linux: whatever admin/login user the box uses (often `root`; ask).
 
-       hh provision <alias> <host> [port] [platform]
+2. Register and generate the key. Pass the user as the fifth argument (or as
+   `user@host`) unless the platform default is correct:
 
-   This prints a confirmation line and a public key between `PUBLIC_KEY_BEGIN`
-   and `PUBLIC_KEY_END`.
+       hh provision <alias> <host> [port] [platform] [user]
 
-3. Give the user that public key and tell them to install it on the target's
-   root account. Where to paste it, by platform:
-   - TrueNAS: web UI -> Credentials -> Users -> root -> Edit -> "Authorized Keys"
-     (or SSH keypair) -> paste the key -> Save.
+   Examples:
+
+       hh provision pve1 10.0.0.10 22 proxmox            # connects as root
+       hh provision nas1 10.0.0.20 22 truenas            # defaults to truenas_admin
+       hh provision box1 10.0.0.30 22 linux deploy       # connects as deploy
+
+   This prints a confirmation line (which states the user it registered) and a
+   public key between `PUBLIC_KEY_BEGIN` and `PUBLIC_KEY_END`. Read that line
+   back to the user so they install the key on the right account.
+
+3. Give the user that public key and tell them to install it on the target
+   account **that provision registered** (shown in the confirmation line), not
+   necessarily root. Where to paste it, by platform:
+   - TrueNAS: web UI -> Credentials -> Users -> `truenas_admin` -> Edit ->
+     "Authorized Keys" (or SSH keypair) -> paste the key -> Save.
    - Proxmox: add the line to `/root/.ssh/authorized_keys` on the node (via its
      shell or the node's file tools).
-   - Linux: append the line to `~/.ssh/authorized_keys` for the login user.
+   - Linux: append the line to `~/.ssh/authorized_keys` for that login user.
 
 4. Once they confirm it's installed, verify:
 
@@ -56,4 +72,9 @@ target themselves.
   `hh add-host`, run by an admin on the box. Offer keys first; they are more
   secure and work cleanly on TrueNAS, Proxmox, and Linux.
 - You never see or need the private key or any password. Do not ask for one.
+- Wrong connect user? `hh test` will fail even with the key installed, because
+  the broker logs in as the registered user. Provision refuses to overwrite an
+  existing alias, so to change the user ask the operator to run
+  `hh rm-host <alias>` from an admin shell, then re-provision with the correct
+  user. (rm-host needs sudo and cannot be run from the chat.)
 - After adding, `hh overview` and `hh inventory` will include the new host.

@@ -35,7 +35,9 @@ UI's built-in terminal, but the normal experience is the browser.
     hh inventory [alias]         what is RUNNING (VMs, LXCs, containers, apps)
     hh scan [cidr]               discover live hosts on the network
     hh doctor                    check the whole setup is healthy
-    hh provision <alias> <host>  register a host with a generated key (UI-safe)
+    hh provision <alias> <host> [port] [platform] [user]
+                                 register a host with a generated key (UI-safe);
+                                 user defaults to truenas_admin for truenas, else root
 
     hh add-host                  register a host (operator)
     hh rm-host <alias>           remove a host and its credential
