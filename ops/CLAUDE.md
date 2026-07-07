@@ -26,13 +26,21 @@ through a broker that holds the credentials for you:
 hh run works the same for every host: TrueNAS, Proxmox, and any Linux box are all
 reached as a normal shell over SSH.
 
-Some hosts connect as a non-root admin user, not root: `hh list` shows the connect
-user per host. On modern TrueNAS that user is `truenas_admin` (root SSH is
-disabled). Privileged commands there (zpool, midclt, qm, pct, docker, virsh) need
-`sudo`, so run them as, e.g., `hh run <alias> "sudo -n zpool status"`. Plain reads
-(uptime, df, ls, cat) do not. The built-in `hh overview` and `hh inventory`
-already add sudo automatically for non-root hosts; you only need it for your own
-ad-hoc `hh run` commands.
+Some hosts connect as a non-root admin user, not root; `hh list` shows the connect
+user per host (modern TrueNAS is `truenas_admin`). For those hosts HomelabHero
+expects passwordless sudo to be enabled - it is set up at onboarding (see the
+add-server skill) and `hh doctor` flags any host missing it. Once enabled:
+
+- Privileged raw tools (docker, smartctl, zpool, zfs, qm, pct, virsh) run with a
+  `sudo -n` prefix, e.g. `hh run <alias> "sudo -n docker ps"`. Plain reads
+  (uptime, df, ls, cat) need nothing.
+- On TrueNAS, `midclt` works WITHOUT sudo - call it plain, and prefer it for
+  storage/app work (it covers most of TrueNAS through the middleware API).
+
+If a host does NOT have passwordless sudo yet, `sudo -n` fails with a password
+prompt: enable it (add-server skill) or, on TrueNAS, fall back to `midclt`.
+`hh overview` and `hh inventory` add the sudo prefix automatically only when the
+host actually has passwordless sudo, and run bare otherwise.
 
 Start any "what do we have / what is the state" task with hh list, then
 hh overview and hh inventory. Do not assume host names or guests; read them live.

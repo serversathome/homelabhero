@@ -15,10 +15,16 @@ description: >
 Reached over SSH as `truenas`. Read `infra/truenas.md` for pool names, datasets,
 and schedules before acting. Bias hard toward read-only until the cause is clear.
 
-Modern TrueNAS connects as `truenas_admin` (root SSH is disabled), so privileged
-commands need `sudo -n`. It is shown in the examples below and is harmless when a
-host connects as root, so keep it. `hh list` shows the connect user; plain reads
-like `df` do not need it.
+Modern TrueNAS connects as `truenas_admin` (root SSH is disabled). Two paths:
+
+- `midclt` (the middleware) works WITHOUT sudo - call it plain. Prefer it for
+  reads and changes where a method exists (pools, datasets, disks, apps, shares).
+  See the truenas-middleware skill.
+- The raw CLI tools (`zpool`, `zfs`, `smartctl`, `lsblk`, `docker`) do need root.
+  They are shown below with `sudo -n`, which works once the box has passwordless
+  sudo enabled for `truenas_admin` - HomelabHero enables that at onboarding (see
+  the add-server skill), and `hh doctor` flags it if missing. If a raw command
+  fails with a sudo/password error, use the midclt equivalent instead.
 
 For the complete command surface of this platform, read capabilities/truenas.md. For a method that is not documented there, use the truenas-middleware skill to discover it live.
 
@@ -27,7 +33,7 @@ For the complete command surface of this platform, read capabilities/truenas.md.
     hh run truenas "sudo -n zpool status -x"     # fast "all healthy?" verdict
     hh run truenas "sudo -n zpool list"          # capacity + health per pool
     hh run truenas "sudo -n zpool status -v"     # per-vdev/per-disk errors if not healthy
-    hh run truenas "sudo -n midclt call alert.list | jq '.[] | {level, formatted}'"
+    hh run truenas "midclt call alert.list | jq '.[] | {level, formatted}'"
     hh run truenas "df -h; sudo -n zfs list -o name,used,avail,refer,mountpoint"
 
 ## Common cases
@@ -42,7 +48,7 @@ For the complete command surface of this platform, read capabilities/truenas.md.
 - Pool nearly full: `sudo -n zpool list` capacity, then find the heavy datasets
   `sudo -n zfs list -o name,used -s used`. Old snapshots are a common hidden
   consumer: `sudo -n zfs list -t snapshot -o name,used -s used | tail`.
-- Replication failing: `sudo -n midclt call replication.query | jq '.[] | {name, state: .state.state}'`
+- Replication failing: `midclt call replication.query | jq '.[] | {name, state: .state.state}'`
   then the task's error, plus SSH connectivity to the target.
 - SMART concern: `sudo -n smartctl -H /dev/<disk>` for the verdict,
   `sudo -n smartctl -a /dev/<disk>` for the full attribute table.
@@ -62,5 +68,5 @@ before any risky change.
 
 ## Apps on TrueNAS
 
-    hh run truenas "sudo -n midclt call app.query | jq '.[] | {name, state}'"
+    hh run truenas "midclt call app.query | jq '.[] | {name, state}'"
     hh run truenas "sudo -n docker ps"      # if custom Docker apps are in use

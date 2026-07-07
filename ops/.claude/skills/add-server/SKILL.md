@@ -64,6 +64,13 @@ target themselves.
 5. Show it landed:
 
        hh list
+       hh doctor
+
+   A **root** connect user (the common case) needs nothing further - it runs every
+   command directly. A **non-root** user (e.g. TrueNAS `truenas_admin`) needs
+   passwordless sudo for privileged commands (docker, smartctl, zpool...) to work;
+   `hh doctor` flags any host missing it. On TrueNAS the middleware (`midclt`)
+   works without sudo and covers most tasks regardless.
 
 ## Important
 
