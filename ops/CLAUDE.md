@@ -88,6 +88,11 @@ When the failing layer is not obvious, work outward:
 3. Storage underneath it (ZFS pool, dataset, disk) -> truenas-ops
 4. The network between them (mesh, switch, gateway, DNS, tunnels) -> network-diag
 
+Cross-cutting skills that sit outside the ladder: backup-restore (snapshot,
+restore, roll back, verify recoverability), patch-management (update hosts and
+containers safely), deploy-app (stand up a new container/stack), and
+security-audit (read-only posture review). Reach for these by task, not layer.
+
 Most "everything is down" events are actually layer 3 or 4 in disguise. Check
 reachability and DNS early with hh test and the network-diag skill.
 

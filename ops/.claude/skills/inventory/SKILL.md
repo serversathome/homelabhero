@@ -19,6 +19,11 @@ Goal: a current, accurate picture of every workload across every registered host
     hh inventory            # everything, all hosts
     hh inventory <alias>    # one host
     hh inventory --save     # also snapshot into inventory/ for git history
+    hh diff [alias]         # what changed vs the last saved snapshot
+
+For "what changed since yesterday / last week", run `hh diff` - it compares the
+live inventory to the last `--save`d snapshot and shows only what appeared,
+vanished, or changed state.
 
 `hh inventory` already knows how to enumerate each platform:
 

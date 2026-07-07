@@ -14,7 +14,15 @@ description: >
 # Docker stack ops
 
 Reached over SSH to the docker host(s). Read `infra/docker-stacks.md` for host
-aliases, the stacks directory, and stack membership before acting.
+aliases, the compose layout, and stack membership before acting.
+
+If the docker host connects as a non-root user, prefix `docker` / `docker
+compose` with `sudo -n` (see CLAUDE.md). Where compose files live depends on the
+setup and is recorded in `infra/docker-stacks.md`: it may be a single
+`/mnt/<pool>/docker/docker-compose.yml` (the TrueNAS layout), per-stack
+`/opt/stacks/<stack>/compose.yaml` (Dockge), or stacks defined in Portainer.
+This skill is for troubleshooting/operating existing stacks; to stand up a NEW
+app or stack, use the deploy-app skill.
 
 ## Diagnose first
 
@@ -46,9 +54,10 @@ restart qBittorrent. Never let qBittorrent run with a leaked (home) IP.
 
 ## State-changing (confirm first)
 
-    hh run <dockerhost> "cd <stacks>/<stack> && docker compose restart <service>"
-    hh run <dockerhost> "cd <stacks>/<stack> && docker compose up -d"
-    hh run <dockerhost> "cd <stacks>/<stack> && docker compose pull && docker compose up -d"
+    # from the compose dir: Dockge => /opt/stacks/<stack>, single-file => /mnt/<pool>/docker
+    hh run <dockerhost> "cd <composedir> && docker compose restart <service>"
+    hh run <dockerhost> "cd <composedir> && docker compose up -d"
+    hh run <dockerhost> "cd <composedir> && docker compose pull && docker compose up -d"
 
 Do not `docker compose down -v` or prune volumes without an explicit go-ahead;
 the `-v` and prune paths delete app data. Image pruning is fine, volume pruning

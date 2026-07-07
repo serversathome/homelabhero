@@ -19,17 +19,20 @@ everything beyond it: the middleware exposes many hundreds of methods, and their
 names, parameters, and return shapes vary by TrueNAS version. Do not guess. Read
 them off the actual box.
 
-All commands run through the broker, e.g. `hh run truenas "<command>"`. TrueNAS
-ships python3 (the middleware is python), so python3 is the reliable JSON parser;
-jq may or may not be present, so check with `command -v jq` before relying on it.
+All commands run through the broker, e.g. `hh run truenas "<command>"`. Modern
+TrueNAS connects as `truenas_admin` (root SSH is disabled) and `midclt` needs
+root, so prefix every `midclt` call with `sudo -n` (shown below; harmless if the
+host connects as root). TrueNAS ships python3 (the middleware is python), so
+python3 is the reliable JSON parser; jq may or may not be present, so check with
+`command -v jq` before relying on it.
 
 ## List the methods that actually exist
 
     # every method name on this box, sorted
-    midclt call core.get_methods | python3 -c "import json,sys;[print(k) for k in sorted(json.load(sys.stdin))]"
+    sudo -n midclt call core.get_methods | python3 -c "import json,sys;[print(k) for k in sorted(json.load(sys.stdin))]"
 
     # only a namespace you care about (e.g. everything under 'pool')
-    midclt call core.get_methods | python3 -c "import json,sys;[print(k) for k in sorted(json.load(sys.stdin)) if k.startswith('pool')]"
+    sudo -n midclt call core.get_methods | python3 -c "import json,sys;[print(k) for k in sorted(json.load(sys.stdin)) if k.startswith('pool')]"
 
 Namespaces are regular: `pool.*`, `pool.dataset.*`, `pool.snapshottask.*`,
 `app.*`, `service.*`, `interface.*`, `sharing.smb.*`, `replication.*`,
@@ -42,7 +45,7 @@ For any state-changing method, look up its accepts schema so you pass the right
 arguments, then confirm with Evan before running it.
 
     # description + accepted arguments + return shape for one method
-    midclt call core.get_methods | python3 -c "import json,sys,pprint;pprint.pprint(json.load(sys.stdin).get('pool.dataset.create'))"
+    sudo -n midclt call core.get_methods | python3 -c "import json,sys,pprint;pprint.pprint(json.load(sys.stdin).get('pool.dataset.create'))"
 
 The `accepts` field is the JSON schema for the arguments; `returns` is what
 comes back. Read `accepts` to build the call correctly.
@@ -52,15 +55,15 @@ comes back. Read `accepts` to build the call correctly.
 Arguments are passed as JSON positional args:
 
     # read-only query with a filter (safe)
-    midclt call pool.dataset.query '[["name","=","tank/media"]]'
+    sudo -n midclt call pool.dataset.query '[["name","=","tank/media"]]'
 
     # a method that takes an object argument
-    midclt call service.restart '"cifs"'
+    sudo -n midclt call service.restart '"cifs"'
 
 Long-running operations are jobs. Add `-j` so midclt waits for completion and
 returns the result instead of just a job id:
 
-    midclt call -j pool.scrub '{"pool": "tank", "action": "START"}'
+    sudo -n midclt call -j pool.scrub '{"pool": "tank", "action": "START"}'
 
 ## Read vs write
 
@@ -75,7 +78,7 @@ house rules in CLAUDE.md.
 
 ## Fallbacks
 
-If `core.get_methods` is unavailable on a given version, `midclt call
+If `core.get_methods` is unavailable on a given version, `sudo -n midclt call
 core.get_services` lists service namespaces, and the box also serves interactive
 API docs at `https://<truenas-host>/api/docs` for a human to browse. Stay on the
 SSH + midclt path; do not add API keys or network API calls.
