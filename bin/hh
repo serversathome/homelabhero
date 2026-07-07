@@ -289,7 +289,10 @@ cmd_doctor() {
     local a u; a="$(basename "$f" .conf)"; u="$(conf_get "$f" USER)"
     if ! broker "$a" 'echo ok' 2>/dev/null | grep -q ok; then bad "cannot reach ${a}"; continue; fi
     if [ "$u" = "root" ] || broker "$a" 'sudo -n true' >/dev/null 2>&1; then ok "reach ${a} (${u})"
-    else note "reach ${a} (${u}) - no passwordless sudo, so raw root tools (docker, zpool, smartctl) will not run; midclt still works. Enable passwordless sudo for ${u}, or connect as root."; fi
+    else
+      note "reach ${a} (${u}) - no passwordless sudo: raw root tools (docker, zpool, smartctl) will not run (midclt still works)."
+      printf '           fix: TrueNAS UI -> Credentials -> Users -> %s -> Edit -> "Allow all sudo commands with no password"; or re-register %s as root.\n' "$u" "$a"
+    fi
   done
 
   echo "Auto-update"

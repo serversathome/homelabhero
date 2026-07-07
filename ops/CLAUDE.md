@@ -41,6 +41,25 @@ connect as a non-root admin like `truenas_admin`. On those:
 `hh overview` and `hh inventory` already apply this automatically (sudo only when
 it works). Root hosts need none of it.
 
+When you hit this wall - a privileged command on a non-root host fails with
+`sudo: a password is required`, a permission denied on a root-owned path or the
+Docker socket, or `hh doctor` reports the host has no passwordless sudo - do NOT
+just silently work around it or give up. Tell the user plainly that the host
+connects as a non-root user without passwordless sudo, and give them the one-time
+fix so they can decide:
+
+- TrueNAS (`truenas_admin`): in the web UI, Credentials -> Users -> select the
+  user -> Edit -> set "Allowed sudo commands" AND "Allowed sudo commands (no
+  password)" to include all (check "Allow all sudo commands with no password") ->
+  Save. Then `hh doctor` will show passwordless sudo is available and the raw
+  tools work.
+- Linux / other: from a root shell on that host,
+  `echo '<user> ALL=(ALL) NOPASSWD: ALL' | sudo tee /etc/sudoers.d/homelabhero-<user>`.
+- Or re-register the host as root (no sudo needed at all).
+
+Meanwhile, get what you can through `midclt` (on TrueNAS) so the user is not
+blocked while they decide.
+
 Start any "what do we have / what is the state" task with hh list, then
 hh overview and hh inventory. Do not assume host names or guests; read them live.
 
