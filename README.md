@@ -33,6 +33,7 @@ UI's built-in terminal, but the normal experience is the browser.
     hh test <alias>              connectivity check
     hh overview                  read-only vitals sweep across all hosts
     hh inventory [alias]         what is RUNNING (VMs, LXCs, containers, apps)
+    hh diff [alias]              inventory drift vs the last saved snapshot
     hh scan [cidr]               discover live hosts on the network
     hh doctor                    check the whole setup is healthy
     hh provision <alias> <host> [port] [platform] [user]
@@ -43,6 +44,7 @@ UI's built-in terminal, but the normal experience is the browser.
     hh rm-host <alias>           remove a host and its credential
     hh update                    update the OS + Claude now (operator)
     hh login                     log Claude Code in as the agent user
+    hh audit [lines]             review the broker audit log (operator)
     hh version                   print the HomelabHero version
 
 ## The idea
@@ -73,7 +75,8 @@ The broker also refuses loopback targets and unregistered aliases.
 Every brokered command and host registration is recorded to
 `/var/log/homelabhero-broker.log`, owned by `hhvault` and unreadable by the agent,
 so a hijacked agent can neither read past activity nor erase its own tracks. The
-log rotates weekly (`/etc/logrotate.d/homelabhero`).
+log rotates weekly (`/etc/logrotate.d/homelabhero`). Review it as an operator with
+`hh audit [lines]` (needs sudo; the agent cannot read it, by design).
 
 What this protects: credential material never enters Claude's context and cannot be
 exfiltrated. What it does not do: restrict what Claude may run on a host it is
@@ -145,7 +148,8 @@ auto-update runs it for you after each update.
             ├── settings.json      permission posture (forces the broker)
             └── skills/            triage, inventory, add-server, proxmox,
                                    truenas, truenas-middleware, docker,
-                                   host (linux), network
+                                   host (linux), network, backup-restore,
+                                   security-audit
 
 ## Platform notes
 

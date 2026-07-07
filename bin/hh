@@ -16,6 +16,7 @@ AGENT_USER="hhagent"
 BROKER="/usr/local/bin/hh-connect"
 UPDATER="/usr/local/bin/hh-update"
 UPDATE_LOG="/var/log/homelabhero-update.log"
+BROKER_LOG="/var/log/homelabhero-broker.log"
 NAME_RE='^[A-Za-z0-9._-]+$'
 
 die() { printf 'hh: %s\n' "$*" >&2; exit 1; }
@@ -37,6 +38,7 @@ HomelabHero
   hh scan [cidr]               discover live hosts on the network (read-only)
                                  add --add to pick and register them (operator)
   hh doctor                    check the whole setup is healthy
+  hh diff [alias]              inventory drift vs the last saved snapshot
   hh provision <alias> <host> [port] [platform] [user]
                                register a host with a generated key (key-only,
                                no password); prints the public key to install.
@@ -47,16 +49,24 @@ HomelabHero
   hh rm-host <alias>           remove a host and its credential
   hh update                    update the OS + Claude now (operator, needs sudo)
   hh login                     log Claude Code in as the agent user
+  hh audit [lines]             review the broker audit log (operator, needs sudo)
   hh version                   print the HomelabHero version
 EOF
 }
 
 # Remote command snippets (Linux shells; kept free of dollar signs and nested
 # single quotes so they survive the trip through the broker to the remote shell).
+# Privileged tools (zpool, midclt, qm, pct, docker, virsh) take a per-host
+# privilege prefix: empty for a root connect user, "sudo -n " for a non-root
+# admin like truenas_admin. VITALS needs no privilege.
 VITALS_NIX="uptime -p 2>/dev/null || uptime; free -h | grep -i '^Mem'; df -h / | tail -1"
-INV_PROXMOX="echo '# VMs'; qm list; echo; echo '# LXCs'; pct list; echo; echo '# Storage'; pvesm status"
-INV_TRUENAS="echo '# Pools'; zpool list; echo; echo '# Containers'; docker ps 2>/dev/null; echo; echo '# Apps'; midclt call app.query 2>/dev/null | head -c 3000; echo"
-INV_LINUX="echo '# Containers'; command -v docker >/dev/null 2>&1 && docker ps || echo '(no docker)'; echo; echo -n '# Running services: '; systemctl list-units --type=service --state=running --no-legend --no-pager 2>/dev/null | wc -l; echo; echo '# Libvirt'; command -v virsh >/dev/null 2>&1 && virsh list --all || echo '(no libvirt)'"
+_inv_proxmox() { local p="$1"; echo "echo '# VMs'; ${p}qm list; echo; echo '# LXCs'; ${p}pct list; echo; echo '# Storage'; ${p}pvesm status"; }
+_inv_truenas() { local p="$1"; echo "echo '# Pools'; ${p}zpool list; echo; echo '# Containers'; ${p}docker ps 2>/dev/null; echo; echo '# Apps'; ${p}midclt call app.query 2>/dev/null | head -c 3000; echo"; }
+_inv_linux()   { local p="$1"; echo "echo '# Containers'; command -v docker >/dev/null 2>&1 && ${p}docker ps || echo '(no docker)'; echo; echo -n '# Running services: '; systemctl list-units --type=service --state=running --no-legend --no-pager 2>/dev/null | wc -l; echo; echo '# Libvirt'; command -v virsh >/dev/null 2>&1 && ${p}virsh list --all || echo '(no libvirt)'"; }
+
+# Privilege prefix for a host's registered connect user: root needs none; a
+# non-root admin needs sudo for the tools above.
+_priv() { [ "$(conf_get "${REG_DIR}/$1.conf" USER)" != "root" ] && printf 'sudo -n ' || true; }
 
 # ---- read-only, agent-safe --------------------------------------------------
 
@@ -101,7 +111,7 @@ cmd_overview() {
     printf -- '---------------------------------------------\n## %s (%s)\n' "$a" "$plat"
     if ! broker "$a" 'true' 2>/dev/null; then echo "  UNREACHABLE"; continue; fi
     broker "$a" "$VITALS_NIX" 2>/dev/null | sed 's/^/  /' || true
-    [ "$plat" = "truenas" ] && { echo -n "  zpool: "; broker "$a" 'zpool status -x' 2>/dev/null; }
+    [ "$plat" = "truenas" ] && { echo -n "  zpool: "; broker "$a" "$(_priv "$a")zpool status -x" 2>/dev/null; }
   done
   echo '---------------------------------------------'
 }
@@ -110,10 +120,11 @@ _inventory_one() {
   local a plat; a="$1"; plat="$(_platform_of "$a")"
   printf -- '=============================================\n# %s (%s)\n' "$a" "$plat"
   if ! broker "$a" 'true' 2>/dev/null; then echo "UNREACHABLE"; return; fi
+  local p; p="$(_priv "$a")"
   case "$plat" in
-    proxmox) broker "$a" "$INV_PROXMOX" 2>/dev/null || true ;;
-    truenas) broker "$a" "$INV_TRUENAS" 2>/dev/null || true ;;
-    *)       broker "$a" "$INV_LINUX"   2>/dev/null || true ;;
+    proxmox) broker "$a" "$(_inv_proxmox "$p")" 2>/dev/null || true ;;
+    truenas) broker "$a" "$(_inv_truenas "$p")" 2>/dev/null || true ;;
+    *)       broker "$a" "$(_inv_linux "$p")"   2>/dev/null || true ;;
   esac
 }
 
@@ -137,6 +148,23 @@ cmd_inventory() {
     else
       echo "(could not save: ${dir} not writable)" >&2
     fi
+  fi
+}
+
+cmd_diff() {
+  # Show what changed in the live inventory since the last saved snapshot. Pair
+  # with `hh inventory --save` (which the box does over time), so this answers
+  # "what appeared/vanished/changed since then?".
+  local one="${1:-}"
+  local base="${HOME}/homelab-ops/inventory/latest.md"
+  [ -f "$base" ] || die "no saved snapshot at ${base} (run: hh inventory --save first)"
+  local cur
+  if [ -n "$one" ]; then cur="$(cmd_inventory "$one")"; else cur="$(cmd_inventory)"; fi
+  # Ignore the volatile timestamp header line when comparing.
+  if diff -u --label "snapshot (${base##*/})" --label "current (live)" \
+       <(grep -v '^HomelabHero inventory' "$base") \
+       <(printf '%s\n' "$cur" | grep -v '^HomelabHero inventory'); then
+    echo "No drift since the last saved snapshot."
   fi
 }
 
@@ -229,6 +257,10 @@ cmd_doctor() {
     local perm; perm="$(stat -c '%a %U' "$VAULT_DIR" 2>/dev/null || true)"
     [ "$perm" = "700 ${VAULT_USER}" ] && ok "vault perms (${perm})" || note "vault perms are '${perm}', expected '700 ${VAULT_USER}'"
   else bad "vault dir missing"; fi
+  if [ -f "$BROKER_LOG" ]; then
+    local bperm; bperm="$(stat -c '%a %U' "$BROKER_LOG" 2>/dev/null || true)"
+    [ "$bperm" = "600 ${VAULT_USER}" ] && ok "broker audit log protected (${bperm})" || note "broker audit log perms are '${bperm}', expected '600 ${VAULT_USER}'"
+  else note "broker audit log not present yet (${BROKER_LOG})"; fi
 
   echo "Runtime"
   if systemctl is-active --quiet homelab-cc; then ok "service homelab-cc active"; else bad "service homelab-cc not active"; fi
@@ -328,6 +360,17 @@ cmd_update() {
   sudo "$UPDATER"
 }
 
+cmd_audit() {
+  # Operator-only. The broker audit log is owned by the vault user and is
+  # unreadable by the agent by design (a hijacked agent must not be able to read
+  # or erase its own tracks), so reviewing it needs real sudo.
+  local n="${1:-40}"
+  [[ "$n" =~ ^[0-9]+$ ]] || die "usage: hh audit [lines]"
+  [ -f "$BROKER_LOG" ] || die "no broker audit log yet at ${BROKER_LOG}"
+  echo "Last ${n} brokered actions (time  alias  user@host:port  command):"
+  sudo tail -n "$n" "$BROKER_LOG"
+}
+
 cmd_provision() {
   [ "$#" -ge 2 ] || die "usage: hh provision <alias> <host> [port] [platform] [user]"
   exec sudo -n -u "$VAULT_USER" /usr/local/bin/hh-provision "$@"
@@ -351,6 +394,7 @@ main() {
     test)      cmd_test "$@" ;;
     overview)  cmd_overview "$@" ;;
     inventory) cmd_inventory "$@" ;;
+    diff)      cmd_diff "$@" ;;
     scan)      cmd_scan "$@" ;;
     doctor)    cmd_doctor "$@" ;;
     provision) cmd_provision "$@" ;;
@@ -358,6 +402,7 @@ main() {
     rm-host)   cmd_rm_host "$@" ;;
     update)    cmd_update "$@" ;;
     login)     cmd_login "$@" ;;
+    audit)     cmd_audit "$@" ;;
     version|--version|-V) echo "hh (HomelabHero) ${HH_VERSION}" ;;
     ''|-h|--help|help) usage ;;
     *) die "unknown command: ${sub} (try: hh help)" ;;
