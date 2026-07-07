@@ -28,23 +28,28 @@ die()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
 preflight() {
   # no_new_privs stops sudo from gaining root, and the broker runs through sudo,
   # so nothing works until it is cleared. This is the flag behind the TrueNAS
-  # "no new privileges" install failure.
+  # "no new privileges" install failure. The lever to clear it differs by
+  # container manager (TrueNAS moved from Incus to libvirt between 25.x and 26),
+  # so keep the message tool-agnostic rather than prescribe commands that only
+  # apply to one of them.
   if grep -qs '^NoNewPrivs:[[:space:]]*1' /proc/self/status; then
     cat >&2 <<'EOF'
 
-[error] This LXC has the "no new privileges" (no_new_privs) flag set, which stops
-        sudo from gaining root. HomelabHero's connection broker runs through
-        sudo, so it cannot work until that flag is cleared.
+[error] This container has the "no new privileges" (no_new_privs) flag set, which
+        stops sudo from gaining root. HomelabHero's connection broker runs through
+        sudo, so nothing works until that flag is cleared.
 
-        This is the default for TrueNAS "Instances" (Incus) containers, and the
-        UI's "privileged" toggle does NOT clear it. From the TrueNAS host shell:
+        Unprivileged container managers set this flag. To fix it:
 
-            incus config set <instance> security.privileged true
-            incus config set <instance> raw.lxc 'lxc.no_new_privs=0'
-            incus restart <instance>
+          - Proxmox LXC works as-is (the flag is not set there by default).
 
-        then re-run this installer inside the container. (A Proxmox LXC has no
-        such restriction and works as-is; a VM works too if you prefer one.)
+          - On TrueNAS, recreate the instance as "privileged". TrueNAS switched
+            its container backend from Incus (25.x) to libvirt (26), so the exact
+            toggle moved between versions and some builds keep the flag on even
+            when privileged. If it still fails after that, run HomelabHero in a
+            VM instead: a VM has its own kernel and none of these restrictions.
+
+        Then re-run this installer inside the instance.
 EOF
     die "no_new_privs is set; sudo cannot escalate to root (see above)."
   fi
