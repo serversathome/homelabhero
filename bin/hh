@@ -64,9 +64,29 @@ _inv_proxmox() { local p="$1"; echo "echo '# VMs'; ${p}qm list; echo; echo '# LX
 _inv_truenas() { local p="$1"; echo "echo '# Pools'; ${p}zpool list; echo; echo '# Containers'; ${p}docker ps 2>/dev/null; echo; echo '# Apps'; ${p}midclt call app.query 2>/dev/null | head -c 3000; echo"; }
 _inv_linux()   { local p="$1"; echo "echo '# Containers'; command -v docker >/dev/null 2>&1 && ${p}docker ps || echo '(no docker)'; echo; echo -n '# Running services: '; systemctl list-units --type=service --state=running --no-legend --no-pager 2>/dev/null | wc -l; echo; echo '# Libvirt'; command -v virsh >/dev/null 2>&1 && ${p}virsh list --all || echo '(no libvirt)'"; }
 
-# Privilege prefix for a host's registered connect user: root needs none; a
-# non-root admin needs sudo for the tools above.
-_priv() { [ "$(conf_get "${REG_DIR}/$1.conf" USER)" != "root" ] && printf 'sudo -n ' || true; }
+# Privilege prefix for a host's registered connect user. A root user needs none.
+# A non-root admin needs "sudo -n " for the raw tools above, but ONLY if that user
+# actually has passwordless sudo - otherwise sudo -n hits the password wall and
+# the command fails, so we fall back to running bare (many reads, and midclt on
+# TrueNAS, work without any sudo). Probed once per host per invocation and cached.
+# HomelabHero wants passwordless sudo enabled on every non-root host so the
+# controller is fully powered; `hh doctor` flags hosts where it is missing.
+declare -A _PRIV_CACHE
+_priv() {
+  local a="$1"
+  [ "$(conf_get "${REG_DIR}/$a.conf" USER)" = "root" ] && return 0
+  if [ -z "${_PRIV_CACHE[$a]:-}" ]; then
+    if broker "$a" 'sudo -n true' >/dev/null 2>&1; then _PRIV_CACHE[$a]='sudo -n '; else _PRIV_CACHE[$a]='none'; fi
+  fi
+  [ "${_PRIV_CACHE[$a]}" = 'none' ] || printf '%s' "${_PRIV_CACHE[$a]}"
+  return 0
+}
+
+# Does this host's non-root connect user have passwordless sudo? (root => n/a)
+_has_nopasswd_sudo() {
+  [ "$(conf_get "${REG_DIR}/$1.conf" USER)" = "root" ] && return 0
+  broker "$1" 'sudo -n true' >/dev/null 2>&1
+}
 
 # ---- read-only, agent-safe --------------------------------------------------
 
@@ -274,8 +294,11 @@ cmd_doctor() {
   local files=("$REG_DIR"/*.conf)
   [ "${#files[@]}" -eq 0 ] && note "no hosts registered yet (hh add-host)"
   for f in "${files[@]}"; do
-    local a; a="$(basename "$f" .conf)"
-    if broker "$a" 'echo ok' 2>/dev/null | grep -q ok; then ok "reach ${a}"; else bad "cannot reach ${a}"; fi
+    local a u; a="$(basename "$f" .conf)"; u="$(conf_get "$f" USER)"
+    if ! broker "$a" 'echo ok' 2>/dev/null | grep -q ok; then bad "cannot reach ${a}"; continue; fi
+    if [ "$u" = "root" ]; then ok "reach ${a} (root)"
+    elif broker "$a" 'sudo -n true' >/dev/null 2>&1; then ok "reach ${a} (${u}, passwordless sudo OK)"
+    else note "reach ${a} (${u}) but NO passwordless sudo: privileged commands (docker, smartctl, zpool...) will fail. Enable it - see 'hh help' / the add-server skill."; fi
   done
 
   echo "Auto-update"

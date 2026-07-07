@@ -52,7 +52,7 @@ safest applied from the web UI. Check availability over SSH, but hand the actual
 apply to the UI unless Evan asks otherwise (it reboots and manages the boot
 environment for rollback).
 
-    hh run truenas "sudo -n midclt call update.check_available"   # is an update staged?
+    hh run truenas "midclt call update.check_available"   # is an update staged? (midclt needs no sudo)
     # Applying: TrueNAS UI -> System -> Update (creates a boot environment you can roll back to).
 
 ## Docker containers
