@@ -37,9 +37,11 @@ HomelabHero
   hh scan [cidr]               discover live hosts on the network (read-only)
                                  add --add to pick and register them (operator)
   hh doctor                    check the whole setup is healthy
-  hh provision <alias> <host> [port] [platform]
+  hh provision <alias> <host> [port] [platform] [user]
                                register a host with a generated key (key-only,
-                               no password); prints the public key to install
+                               no password); prints the public key to install.
+                               user defaults per platform (truenas ->
+                               truenas_admin, else root); or pass user@host
 
   hh add-host                  register a host (operator, needs sudo)
   hh rm-host <alias>           remove a host and its credential
@@ -327,7 +329,7 @@ cmd_update() {
 }
 
 cmd_provision() {
-  [ "$#" -ge 2 ] || die "usage: hh provision <alias> <host> [port] [platform]"
+  [ "$#" -ge 2 ] || die "usage: hh provision <alias> <host> [port] [platform] [user]"
   exec sudo -n -u "$VAULT_USER" /usr/local/bin/hh-provision "$@"
 }
 
