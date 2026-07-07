@@ -38,7 +38,7 @@ UI's built-in terminal, but the normal experience is the browser.
     hh doctor                    check the whole setup is healthy
     hh provision <alias> <host> [port] [platform] [user]
                                  register a host with a generated key (UI-safe);
-                                 user defaults to truenas_admin for truenas, else root
+                                 connects as root by default (pass a user to override)
 
     hh add-host                  register a host (operator)
     hh rm-host <alias>           remove a host and its credential
@@ -157,14 +157,9 @@ auto-update runs it for you after each update.
   the vault by `hh add-host`. Password auth is supported for stragglers but
   discouraged; a plaintext secret is only as isolated as the user boundary around
   it, which is exactly why the three-user split matters.
-- Non-root connect users need passwordless sudo. HomelabHero is a full controller,
-  so when a host connects as a non-root admin (e.g. TrueNAS `truenas_admin`, since
-  root SSH is disabled there), that user needs passwordless sudo or privileged
-  commands (`docker`, `smartctl`, `zpool`, `apt`...) fail. Onboarding sets this up
-  (the add-server skill enables it - via the TrueNAS middleware, or a
-  `/etc/sudoers.d` NOPASSWD line on Linux), and `hh doctor` flags any host missing
-  it. On TrueNAS, `midclt` works without sudo and covers most storage/app work
-  regardless. Root-connecting hosts (default Proxmox) need none of this.
+- Hosts are reached as root by default, so commands run directly with no sudo. On
+  TrueNAS you can connect as `truenas_admin` instead (pass it to `hh provision`);
+  `midclt` reaches the middleware and covers most TrueNAS work regardless.
 - No MCP servers and no Grafana/Prometheus. The whole surface is SSH plus the
   capability catalogs, kept simple on purpose.
 

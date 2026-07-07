@@ -16,9 +16,8 @@ description: >
 
 Recoverability is the safety net this homelab is built on (see CLAUDE.md). This
 skill is the knowledge for using it: what each platform offers, and how to take,
-inspect, and restore. Everything runs through `hh run <alias> "<command>"`. On a
-non-root host (e.g. `truenas_admin`) prefix privileged commands with `sudo -n`
-(see CLAUDE.md); `hh list` shows the connect user.
+inspect, and restore. Everything runs through `hh run <alias> "<command>"`. On
+TrueNAS, prefer `midclt` (the middleware) for snapshot/replication tasks.
 
 Golden rules:
 - Taking a snapshot is safe and cheap. Deleting one, rolling back, or restoring

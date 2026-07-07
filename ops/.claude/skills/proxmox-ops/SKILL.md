@@ -12,12 +12,8 @@ description: >
 
 # Proxmox ops
 
-Reached over SSH as `pve1` / `pve2`. Read `infra/proxmox.md` for this
+Reached over SSH as `pve1` / `pve2` (root). Read `infra/proxmox.md` for this
 environment's node names, VMIDs, and storage layout before acting.
-
-Proxmox usually connects as root, so the commands below run as-is. If `hh list`
-shows a node connecting as a non-root user, prefix privileged commands (`qm`,
-`pct`, `pvesm`, `vzdump`) with `sudo -n` - see CLAUDE.md.
 
 For the complete command surface of this platform, read capabilities/proxmox.md.
 

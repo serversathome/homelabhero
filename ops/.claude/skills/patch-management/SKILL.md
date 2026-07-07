@@ -15,10 +15,9 @@ description: >
 Updates the machines HomelabHero manages and the containers on them. It does NOT
 update the control-plane LXC itself - that is the operator-only `hh update`.
 
-On non-root hosts prefix privileged commands with `sudo -n` (see CLAUDE.md). This
-is a state-changing workflow: diagnose what's pending, propose it, get a go-ahead,
-and prefer a snapshot/backup first (use the backup-restore skill), especially for
-OS, kernel, and hypervisor updates.
+This is a state-changing workflow: diagnose what's pending, propose it, get a
+go-ahead, and prefer a snapshot/backup first (use the backup-restore skill),
+especially for OS, kernel, and hypervisor updates.
 
 ## Golden rules
 
@@ -32,8 +31,8 @@ OS, kernel, and hypervisor updates.
 
 ## Debian / Ubuntu hosts
 
-    hh run <alias> "sudo -n apt-get update && apt list --upgradable 2>/dev/null"   # what's pending
-    hh run <alias> "sudo -n DEBIAN_FRONTEND=noninteractive apt-get -y upgrade"     # apply (confirm)
+    hh run <alias> "apt-get update && apt list --upgradable 2>/dev/null"   # what's pending
+    hh run <alias> "DEBIAN_FRONTEND=noninteractive apt-get -y upgrade"     # apply (confirm)
     hh run <alias> "ls /var/run/reboot-required 2>/dev/null && echo REBOOT-NEEDED" # kernel/libc?
 
 ## Proxmox
@@ -61,11 +60,11 @@ Pull new images and recreate. Location depends on the layout in
 `infra/docker-stacks.md`:
 
     # single-file layout
-    hh run <dockerhost> "cd /mnt/<pool>/docker && sudo -n docker compose pull && sudo -n docker compose up -d"
+    hh run <dockerhost> "cd /mnt/<pool>/docker && docker compose pull && docker compose up -d"
     # per-stack (Dockge)
-    hh run <dockerhost> "cd /opt/stacks/<stack> && sudo -n docker compose pull && sudo -n docker compose up -d"
+    hh run <dockerhost> "cd /opt/stacks/<stack> && docker compose pull && docker compose up -d"
     # reclaim space afterward (safe - images only, never volumes)
-    hh run <dockerhost> "sudo -n docker image prune -f"
+    hh run <dockerhost> "docker image prune -f"
 
 If Watchtower or Tugtainer is running, image updates may be automated already -
 check before doing it by hand. Note: Watchtower does not touch TrueNAS catalog

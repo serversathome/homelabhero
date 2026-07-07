@@ -16,13 +16,11 @@ description: >
 Reached over SSH to the docker host(s). Read `infra/docker-stacks.md` for host
 aliases, the compose layout, and stack membership before acting.
 
-If the docker host connects as a non-root user, prefix `docker` / `docker
-compose` with `sudo -n` (see CLAUDE.md). Where compose files live depends on the
-setup and is recorded in `infra/docker-stacks.md`: it may be a single
-`/mnt/<pool>/docker/docker-compose.yml` (the TrueNAS layout), per-stack
-`/opt/stacks/<stack>/compose.yaml` (Dockge), or stacks defined in Portainer.
-This skill is for troubleshooting/operating existing stacks; to stand up a NEW
-app or stack, use the deploy-app skill.
+Where compose files live depends on the setup and is recorded in
+`infra/docker-stacks.md`: it may be a single `/mnt/<pool>/docker/docker-compose.yml`
+(the TrueNAS layout), per-stack `/opt/stacks/<stack>/compose.yaml` (Dockge), or
+stacks defined in Portainer. This skill is for troubleshooting/operating existing
+stacks; to stand up a NEW app or stack, use the deploy-app skill.
 
 ## Diagnose first
 

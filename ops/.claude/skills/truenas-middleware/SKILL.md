@@ -20,12 +20,10 @@ names, parameters, and return shapes vary by TrueNAS version. Do not guess. Read
 them off the actual box.
 
 All commands run through the broker, e.g. `hh run truenas "<command>"`. `midclt`
-talks to the middleware and works as `truenas_admin` WITHOUT sudo, so call it
-plain (no `sudo -n`). This is the preferred way to read and change TrueNAS: it
-covers pools, datasets, disks, apps, shares, and more without needing the raw
-root tools. TrueNAS ships python3 (the middleware is python), so python3 is the
-reliable JSON parser; jq may or may not be present, so check with
-`command -v jq` before relying on it.
+talks to the middleware and is the preferred way to read and change TrueNAS: it
+covers pools, datasets, disks, apps, shares, and more. TrueNAS ships python3 (the
+middleware is python), so python3 is the reliable JSON parser; jq may or may not
+be present, so check with `command -v jq` before relying on it.
 
 ## List the methods that actually exist
 

@@ -9,9 +9,9 @@
 #
 # Usage: hh-provision <alias> <host> [port] [platform] [user]
 #
-# The connect user defaults per platform (truenas -> truenas_admin, since modern
-# TrueNAS disables root SSH; everything else -> root). Override it with a fifth
-# argument or by passing user@host as the host.
+# The connect user defaults to root (which needs no sudo on the target). Override
+# it with a fifth argument or by passing user@host as the host if you must connect
+# as a non-root account.
 #
 set -euo pipefail
 
@@ -29,10 +29,8 @@ ALIAS="$1"; HOST="$2"; PORT="${3:-22}"; PLAT="${4:-linux}"; RUSER="${5:-}"
 # fifth-arg user if both are somehow given.
 case "$HOST" in *@*) RUSER="${HOST%@*}"; HOST="${HOST#*@}" ;; esac
 
-# No user specified anywhere: pick a sensible default for the platform.
-if [ -z "$RUSER" ]; then
-  case "$PLAT" in truenas) RUSER="truenas_admin" ;; *) RUSER="root" ;; esac
-fi
+# No user specified anywhere: default to root (needs no sudo on the target).
+[ -n "$RUSER" ] || RUSER="root"
 
 [[ "$ALIAS" =~ $NAME_RE ]] || die "invalid alias"
 [[ "$HOST"  =~ $HOST_RE ]] || die "invalid host"

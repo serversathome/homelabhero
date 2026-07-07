@@ -12,8 +12,7 @@ description: >
 # Deploy a new app / stack
 
 Adding or starting containers is state-changing: propose the compose, confirm,
-then bring it up. On non-root hosts prefix `docker` / `docker compose` with
-`sudo -n` (see CLAUDE.md).
+then bring it up.
 
 ## First, learn THIS homelab's layout - do not assume
 
@@ -97,9 +96,9 @@ in docker-stack-ops).
    Show Evan the compose and confirm before applying.
 4. Bring it up (state-changing):
 
-       hh run <dockerhost> "cd <composedir> && sudo -n docker compose up -d <service>"
+       hh run <dockerhost> "cd <composedir> && docker compose up -d <service>"
 
-5. Verify: `sudo -n docker ps`, `sudo -n docker logs --tail 80 <name>`, and the
+5. Verify: `docker ps`, `docker logs --tail 80 <name>`, and the
    WebUI on its port.
 6. External access wanted? Add it to the Cloudflare Tunnel (Zero Trust -> the
    tunnel -> add public hostname) or the reverse proxy - see network-diag and

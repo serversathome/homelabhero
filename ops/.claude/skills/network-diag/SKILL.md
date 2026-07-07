@@ -54,8 +54,8 @@ there". Compare answers from two vantage points.
 
 If storage throughput suddenly tanks, check for link renegotiation.
 
-    hh run truenas "sudo -n ethtool <iface> | grep -i speed"
-    hh run truenas "sudo -n ip -s link show <iface>"   # errors/drops climbing
+    hh run truenas "ethtool <iface> | grep -i speed"
+    hh run truenas "ip -s link show <iface>"   # errors/drops climbing
 
 The UCG-Ultra and the XS708E are managed from their own UIs; note findings here
 and in `infra/network.md`, since they are not SSH targets.
