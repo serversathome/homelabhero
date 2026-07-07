@@ -45,6 +45,11 @@ AUTH=key
 CRED=${CRED}
 EOF
 
+# Record the registration in the same broker audit log (best-effort).
+printf '%s\t%s\tPROVISION\t%s@%s:%s (%s)\n' \
+  "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$ALIAS" root "$HOST" "$PORT" "$PLAT" \
+  >>/var/log/homelabhero-broker.log 2>/dev/null || true
+
 # Emit a clear block: confirmation plus the PUBLIC key to install on the target.
 echo "REGISTERED ${ALIAS} (${PLAT}) at ${HOST}:${PORT} as root, key auth."
 echo "PUBLIC_KEY_BEGIN"

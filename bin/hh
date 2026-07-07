@@ -8,6 +8,7 @@
 #
 set -euo pipefail
 
+HH_VERSION="0.1.0"
 REG_DIR="/etc/homelabhero/hosts.d"
 VAULT_DIR="/etc/homelabhero/vault"
 VAULT_USER="hhvault"
@@ -44,6 +45,7 @@ HomelabHero
   hh rm-host <alias>           remove a host and its credential
   hh update                    update the OS + Claude now (operator, needs sudo)
   hh login                     log Claude Code in as the agent user
+  hh version                   print the HomelabHero version
 EOF
 }
 
@@ -183,6 +185,11 @@ cmd_scan() {
   [ "$i" -gt 0 ] || { echo "No endpoints found."; return 0; }
 
   if [ "$add" -eq 1 ]; then
+    # Registering hosts writes the registry and generates keys: an operator
+    # action. Refuse cleanly for the low-privilege agent rather than failing
+    # partway through the loop when the first sudo call is rejected.
+    [ "$(id -u)" -eq 0 ] || sudo -v 2>/dev/null || \
+      die "hh scan --add registers hosts and needs sudo; run it from an admin shell, not the Claude UI"
     echo
     local pick; pick="$(ask 'Numbers to register (comma-separated, blank to skip)')"
     IFS=',' read -ra nums <<<"$pick"
@@ -190,8 +197,14 @@ cmd_scan() {
       n="${n// /}"; [[ "$n" =~ ^[0-9]+$ ]] || continue
       local idx=$((n-1)); [ -n "${IPS[$idx]:-}" ] || continue
       local ip="${IPS[$idx]}" op="${PORTLIST[$idx]}" plat=linux
-      case " ${op//,/ } " in *" 8006 "*) plat=proxmox ;; esac
-      echo; echo "Registering ${ip} ..."
+      # Guess from open ports, then let the operator confirm or correct it
+      # (443 alone is often TrueNAS, but just as often a plain Linux web host).
+      case " ${op//,/ } " in
+        *" 8006 "*) plat=proxmox ;;
+        *" 443 "*)  plat=truenas ;;
+      esac
+      plat="$(ask "Platform for ${ip} (linux/truenas/proxmox)" "$plat")"
+      echo; echo "Registering ${ip} as ${plat} ..."
       cmd_add_host --host "$ip" --port 22 --platform "$plat"
     done
   else
@@ -341,6 +354,7 @@ main() {
     rm-host)   cmd_rm_host "$@" ;;
     update)    cmd_update "$@" ;;
     login)     cmd_login "$@" ;;
+    version|--version|-V) echo "hh (HomelabHero) ${HH_VERSION}" ;;
     ''|-h|--help|help) usage ;;
     *) die "unknown command: ${sub} (try: hh help)" ;;
   esac

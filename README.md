@@ -8,9 +8,11 @@ credential.
 
 ## Install (one time)
 
-On a fresh Ubuntu 26.04 LXC, run one command. A new LXC usually has only a root
-user and no curl, so this installs curl first (drop the `apt` part if you already
-have curl; add `sudo` in front of `apt` if you run as a non-root user):
+On a fresh Ubuntu 26.04 LXC, run one command. (The installer is Ubuntu/Debian
+only: it uses `apt`, `systemd`, and `visudo`. It has not been tested on other
+distros.) A new LXC usually has only a root user and no curl, so this installs
+curl first (drop the `apt` part if you already have curl; add `sudo` in front of
+`apt` if you run as a non-root user):
 
     apt update && apt install -y curl && \
       curl -fsSL https://raw.githubusercontent.com/serversathome/homelabhero/main/install.sh | bash
@@ -39,6 +41,7 @@ UI's built-in terminal, but the normal experience is the browser.
     hh rm-host <alias>           remove a host and its credential
     hh update                    update the OS + Claude now (operator)
     hh login                     log Claude Code in as the agent user
+    hh version                   print the HomelabHero version
 
 ## The idea
 
@@ -64,6 +67,11 @@ from the vault, and opens the connection. Claude gets the output, never the secr
 Even a fully hijacked agent cannot exfiltrate a credential, because the OS will not
 let it read the vault and will not let it run anything but the broker as `hhvault`.
 The broker also refuses loopback targets and unregistered aliases.
+
+Every brokered command and host registration is recorded to
+`/var/log/homelabhero-broker.log`, owned by `hhvault` and unreadable by the agent,
+so a hijacked agent can neither read past activity nor erase its own tracks. The
+log rotates weekly (`/etc/logrotate.d/homelabhero`).
 
 What this protects: credential material never enters Claude's context and cannot be
 exfiltrated. What it does not do: restrict what Claude may run on a host it is
@@ -123,7 +131,8 @@ auto-update runs it for you after each update.
     │   ├── hh-connect             privileged broker (runs as hhvault)
     │   ├── hh-provision           key-only host registration (UI-safe add)
     │   └── hh-update              OS + Claude updater (run by cron / hh update)
-    ├── templates/                 sudoers, systemd unit, cron job, cloudcli env
+    ├── templates/                 sudoers, systemd unit, cron job, cloudcli env,
+    │                              logrotate rules, bash completion
     └── ops/                       becomes ~hhagent/homelab-ops (git-backed)
         ├── CLAUDE.md              always-loaded context + house rules
         ├── capabilities/          per-platform capability catalogs
@@ -151,3 +160,9 @@ Everything lives on the LXC rootfs, which persists across reboots. Put the LXC o
 snapshotted dataset and add it to your Proxmox backup schedule. The ops brain is a
 git repo; push it to your own GitHub for a second copy. The vault is intentionally
 excluded from anything git-tracked.
+
+Note that snapshots and backups of the LXC *do* contain the vault, and the vault
+keys are stored unencrypted (they have to be, for non-interactive automation).
+Their safety rests on the `hhvault` user boundary, which a raw filesystem copy
+bypasses, so treat those backups as secret material: keep them somewhere only you
+can reach, exactly as you would the private keys themselves.
