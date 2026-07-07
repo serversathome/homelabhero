@@ -336,7 +336,9 @@ cmd_login() {
   echo "Starting Claude Code as ${AGENT_USER}. Run /login inside, then type /exit." >/dev/tty
   # Force HOME to the agent's home (do not rely on sudo -i) and load nvm so the
   # claude binary is on PATH. Otherwise claude reads root's ~/.claude and fails.
-  sudo -u "$AGENT_USER" -H bash -c "export HOME='${ahome}'; export NVM_DIR=\"\$HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\"; cd \"\$HOME\"; exec claude"
+  # Launch from the ops brain so project settings resolve there (not the caller's
+  # cwd) and the homelab-ops project is registered for the web UI, skills and all.
+  sudo -u "$AGENT_USER" -H bash -c "export HOME='${ahome}'; export NVM_DIR=\"\$HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\"; cd \"\$HOME/homelab-ops\" 2>/dev/null || cd \"\$HOME\"; exec claude"
 }
 
 main() {

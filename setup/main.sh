@@ -161,7 +161,13 @@ EOF
   if [ "${ans:-}" = "s" ]; then
     warn "Skipped. The web UI will ask you to sign in the first time you use it."
   else
-    sudo -u "$AGENT_USER" -H bash -c "export NVM_DIR=\"${AGENT_HOME}/.nvm\"; . \"\$NVM_DIR/nvm.sh\"; exec claude" </dev/tty || true
+    # Run the sign-in FROM the ops brain directory. Two reasons: Claude reads
+    # project settings from the current directory's .claude/ (running elsewhere,
+    # e.g. the installer's /root cwd, makes it try to read /root/.claude and fail
+    # with EACCES as hhagent), and running a session here registers homelab-ops
+    # under ~/.claude/projects/ so the web UI opens it preloaded with the skills.
+    # HOME is set explicitly rather than trusting sudo -H.
+    sudo -u "$AGENT_USER" -H bash -c "export HOME=\"${AGENT_HOME}\"; export NVM_DIR=\"\$HOME/.nvm\"; . \"\$NVM_DIR/nvm.sh\"; cd \"\$HOME/homelab-ops\"; exec claude" </dev/tty || true
   fi
 fi
 
