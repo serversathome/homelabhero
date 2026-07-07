@@ -12,11 +12,14 @@ description: >
 
 # TrueNAS ops
 
-Reached over SSH as `truenas` (root, or a truenas_admin that can reach root).
-Read `infra/truenas.md` for pool names, datasets, and schedules before acting.
-Bias hard toward read-only until the cause is clear. `midclt` (the middleware)
-is the preferred way to inspect and change TrueNAS - it covers pools, datasets,
-disks, apps, and shares (see the truenas-middleware skill).
+Reached over SSH as `truenas`. Read `infra/truenas.md` for pool names, datasets,
+and schedules before acting. Bias hard toward read-only until the cause is clear.
+`midclt` (the middleware) is the preferred way to inspect and change TrueNAS - it
+covers pools, datasets, disks, apps, and shares (see the truenas-middleware
+skill), and needs no sudo. The raw tools below (zpool, zfs, smartctl, docker) need
+root: if this host connects as `truenas_admin`, prefix them with `sudo -n` (works
+when passwordless sudo is enabled for that user; `hh doctor` shows whether it is,
+and if not, use the midclt equivalent). As root they run bare - see CLAUDE.md.
 
 For the complete command surface of this platform, read capabilities/truenas.md. For a method that is not documented there, use the truenas-middleware skill to discover it live.
 

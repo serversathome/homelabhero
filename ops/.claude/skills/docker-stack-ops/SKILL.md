@@ -14,7 +14,10 @@ description: >
 # Docker stack ops
 
 Reached over SSH to the docker host(s). Read `infra/docker-stacks.md` for host
-aliases, the compose layout, and stack membership before acting.
+aliases, the compose layout, and stack membership before acting. Docker needs
+root: if the host connects as a non-root user (e.g. TrueNAS `truenas_admin`),
+prefix `docker` / `docker compose` with `sudo -n` (works when that user has
+passwordless sudo; see CLAUDE.md). Root hosts run it bare.
 
 Where compose files live depends on the setup and is recorded in
 `infra/docker-stacks.md`: it may be a single `/mnt/<pool>/docker/docker-compose.yml`

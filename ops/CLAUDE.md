@@ -26,10 +26,20 @@ through a broker that holds the credentials for you:
 hh run works the same for every host: TrueNAS, Proxmox, and any Linux box are all
 reached as a normal shell over SSH.
 
-Hosts are reached as root (the default connect user), so commands run directly -
-no sudo needed. On TrueNAS the connect user may be `truenas_admin`, which reaches
-root through the middleware; there, prefer `midclt` for storage and app work (it
-covers most of TrueNAS). `hh list` shows the connect user per host.
+Hosts are reached as root by default, so commands run directly - no sudo needed.
+`hh list` shows the connect user per host. Some hosts (notably TrueNAS) may
+connect as a non-root admin like `truenas_admin`. On those:
+
+- `midclt` (TrueNAS middleware) works WITHOUT sudo and covers most of TrueNAS
+  (pools, datasets, disks, apps, shares) - prefer it.
+- Raw root tools (docker, zpool, zfs, smartctl) need sudo. If that user has
+  passwordless sudo enabled, prefix them with `sudo -n`, e.g.
+  `hh run <alias> "sudo -n docker ps"`. If it does not, those commands cannot run
+  as that user - fall back to midclt, or the host should be connected as root.
+  `hh doctor` tells you, per host, whether passwordless sudo is available.
+
+`hh overview` and `hh inventory` already apply this automatically (sudo only when
+it works). Root hosts need none of it.
 
 Start any "what do we have / what is the state" task with hh list, then
 hh overview and hh inventory. Do not assume host names or guests; read them live.

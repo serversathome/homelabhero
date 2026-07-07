@@ -56,11 +56,29 @@ EOF
 
 # Remote command snippets (Linux shells; kept free of dollar signs and nested
 # single quotes so they survive the trip through the broker to the remote shell).
-# Hosts are reached as root (the default connect user), so no sudo is used.
+# Root hosts (the default) run everything bare. Privileged tools (zpool, qm, pct,
+# docker, virsh) take a per-host prefix from _priv: empty for root, "sudo -n " for
+# a non-root admin that has passwordless sudo. midclt talks to the middleware and
+# never needs sudo, so it is not prefixed.
 VITALS_NIX="uptime -p 2>/dev/null || uptime; free -h | grep -i '^Mem'; df -h / | tail -1"
-INV_PROXMOX="echo '# VMs'; qm list; echo; echo '# LXCs'; pct list; echo; echo '# Storage'; pvesm status"
-INV_TRUENAS="echo '# Pools'; zpool list; echo; echo '# Containers'; docker ps 2>/dev/null; echo; echo '# Apps'; midclt call app.query 2>/dev/null | head -c 3000; echo"
-INV_LINUX="echo '# Containers'; command -v docker >/dev/null 2>&1 && docker ps || echo '(no docker)'; echo; echo -n '# Running services: '; systemctl list-units --type=service --state=running --no-legend --no-pager 2>/dev/null | wc -l; echo; echo '# Libvirt'; command -v virsh >/dev/null 2>&1 && virsh list --all || echo '(no libvirt)'"
+_inv_proxmox() { local p="$1"; echo "echo '# VMs'; ${p}qm list; echo; echo '# LXCs'; ${p}pct list; echo; echo '# Storage'; ${p}pvesm status"; }
+_inv_truenas() { local p="$1"; echo "echo '# Pools'; ${p}zpool list; echo; echo '# Containers'; ${p}docker ps 2>/dev/null; echo; echo '# Apps'; midclt call app.query 2>/dev/null | head -c 3000; echo"; }
+_inv_linux()   { local p="$1"; echo "echo '# Containers'; command -v docker >/dev/null 2>&1 && ${p}docker ps || echo '(no docker)'; echo; echo -n '# Running services: '; systemctl list-units --type=service --state=running --no-legend --no-pager 2>/dev/null | wc -l; echo; echo '# Libvirt'; command -v virsh >/dev/null 2>&1 && ${p}virsh list --all || echo '(no libvirt)'"; }
+
+# Privilege prefix for a host. Root => empty (runs bare). A non-root connect user
+# => "sudo -n " but ONLY if that user has passwordless sudo, probed once per run
+# and cached; otherwise empty, so we run bare and never trip the password prompt.
+# midclt is never prefixed (it needs no sudo).
+declare -A _PRIV_CACHE
+_priv() {
+  local a="$1"
+  [ "$(conf_get "${REG_DIR}/$a.conf" USER)" = "root" ] && return 0
+  if [ -z "${_PRIV_CACHE[$a]:-}" ]; then
+    if broker "$a" 'sudo -n true' >/dev/null 2>&1; then _PRIV_CACHE[$a]='sudo -n '; else _PRIV_CACHE[$a]='none'; fi
+  fi
+  [ "${_PRIV_CACHE[$a]}" = 'none' ] || printf '%s' "${_PRIV_CACHE[$a]}"
+  return 0
+}
 
 # ---- read-only, agent-safe --------------------------------------------------
 
@@ -105,7 +123,7 @@ cmd_overview() {
     printf -- '---------------------------------------------\n## %s (%s)\n' "$a" "$plat"
     if ! broker "$a" 'true' 2>/dev/null; then echo "  UNREACHABLE"; continue; fi
     broker "$a" "$VITALS_NIX" 2>/dev/null | sed 's/^/  /' || true
-    [ "$plat" = "truenas" ] && { echo -n "  zpool: "; broker "$a" 'zpool status -x' 2>/dev/null; }
+    [ "$plat" = "truenas" ] && { echo -n "  zpool: "; broker "$a" "$(_priv "$a")zpool status -x" 2>/dev/null; }
   done
   echo '---------------------------------------------'
 }
@@ -114,10 +132,11 @@ _inventory_one() {
   local a plat; a="$1"; plat="$(_platform_of "$a")"
   printf -- '=============================================\n# %s (%s)\n' "$a" "$plat"
   if ! broker "$a" 'true' 2>/dev/null; then echo "UNREACHABLE"; return; fi
+  local p; p="$(_priv "$a")"
   case "$plat" in
-    proxmox) broker "$a" "$INV_PROXMOX" 2>/dev/null || true ;;
-    truenas) broker "$a" "$INV_TRUENAS" 2>/dev/null || true ;;
-    *)       broker "$a" "$INV_LINUX"   2>/dev/null || true ;;
+    proxmox) broker "$a" "$(_inv_proxmox "$p")" 2>/dev/null || true ;;
+    truenas) broker "$a" "$(_inv_truenas "$p")" 2>/dev/null || true ;;
+    *)       broker "$a" "$(_inv_linux "$p")"   2>/dev/null || true ;;
   esac
 }
 
@@ -267,8 +286,10 @@ cmd_doctor() {
   local files=("$REG_DIR"/*.conf)
   [ "${#files[@]}" -eq 0 ] && note "no hosts registered yet (hh add-host)"
   for f in "${files[@]}"; do
-    local a; a="$(basename "$f" .conf)"
-    if broker "$a" 'echo ok' 2>/dev/null | grep -q ok; then ok "reach ${a}"; else bad "cannot reach ${a}"; fi
+    local a u; a="$(basename "$f" .conf)"; u="$(conf_get "$f" USER)"
+    if ! broker "$a" 'echo ok' 2>/dev/null | grep -q ok; then bad "cannot reach ${a}"; continue; fi
+    if [ "$u" = "root" ] || broker "$a" 'sudo -n true' >/dev/null 2>&1; then ok "reach ${a} (${u})"
+    else note "reach ${a} (${u}) - no passwordless sudo, so raw root tools (docker, zpool, smartctl) will not run; midclt still works. Enable passwordless sudo for ${u}, or connect as root."; fi
   done
 
   echo "Auto-update"
