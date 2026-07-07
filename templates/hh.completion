@@ -1,0 +1,26 @@
+# shellcheck shell=bash
+# HomelabHero bash completion. Installed to /etc/bash_completion.d/hh.
+# Completes subcommands, and registered host aliases for commands that take one.
+_hh() {
+  local cur sub subs aliases
+  cur="${COMP_WORDS[COMP_CWORD]}"
+  subs="list run test overview inventory scan doctor provision add-host rm-host update login version help"
+
+  if [ "$COMP_CWORD" -eq 1 ]; then
+    mapfile -t COMPREPLY < <(compgen -W "$subs" -- "$cur")
+    return
+  fi
+
+  sub="${COMP_WORDS[1]}"
+  case "$sub" in
+    run|test|rm-host|inventory|provision)
+      # First argument after these is a host alias.
+      if [ "$COMP_CWORD" -eq 2 ]; then
+        aliases="$(cd /etc/homelabhero/hosts.d 2>/dev/null && \
+          for f in *.conf; do [ -e "$f" ] && printf '%s\n' "${f%.conf}"; done)"
+        mapfile -t COMPREPLY < <(compgen -W "$aliases" -- "$cur")
+      fi
+      ;;
+  esac
+}
+complete -F _hh hh

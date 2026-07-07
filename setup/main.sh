@@ -67,9 +67,16 @@ $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-connect" /usr/local/bi
 $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh"         /usr/local/bin/hh
 $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-update"  /usr/local/bin/hh-update
 $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-provision" /usr/local/bin/hh-provision
+# Bash completion for the hh CLI (subcommands + host aliases).
+$SUDO install -o root -g root -m 644 "${REPO_ROOT}/templates/hh.completion" /etc/bash_completion.d/hh
 # Weekly OS + Claude auto-update (edit or delete /etc/cron.d/homelabhero to change)
 $SUDO install -o root -g root -m 644 "${REPO_ROOT}/templates/cron.homelabhero" /etc/cron.d/homelabhero
+# Keep the logs from growing without bound.
+$SUDO install -o root -g root -m 644 "${REPO_ROOT}/templates/logrotate.homelabhero" /etc/logrotate.d/homelabhero
 [ -f /var/log/homelabhero-update.log ] || $SUDO install -o root -g root -m 644 /dev/null /var/log/homelabhero-update.log
+# Broker audit log: owned by the vault user, unreadable by the agent, so a
+# hijacked agent can neither read past commands nor erase its own tracks.
+[ -f /var/log/homelabhero-broker.log ] || $SUDO install -o "$VAULT_USER" -g "$VAULT_USER" -m 600 /dev/null /var/log/homelabhero-broker.log
 
 # ---------------------------------------------------------------------------
 say "5/10  Sudoers rule (agent may run ONLY the broker, ONLY as vault)"

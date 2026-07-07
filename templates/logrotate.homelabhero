@@ -1,0 +1,13 @@
+# HomelabHero log rotation. Installed to /etc/logrotate.d/homelabhero.
+# Keeps the update and broker audit logs from growing without bound.
+# copytruncate is used so the running processes (cron updater, and the broker
+# which appends as the vault user) keep writing to the same file after rotation.
+/var/log/homelabhero-update.log /var/log/homelabhero-broker.log {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}

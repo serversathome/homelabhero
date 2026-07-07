@@ -18,10 +18,13 @@ apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-conf
 apt-get -y autoremove --purge
 
 echo "--- Claude Code + claudecodeui"
+# Reinstall at @latest rather than `npm update`: a plain global `npm update`
+# will not move a package across a major version, so it can silently stall on an
+# old major. `install ...@latest` always pulls the current release.
 runuser -l "$AGENT_USER" -c '
   export NVM_DIR="$HOME/.nvm"
   [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-  npm -g update @anthropic-ai/claude-code @cloudcli-ai/cloudcli
+  npm install -g @anthropic-ai/claude-code@latest @cloudcli-ai/cloudcli@latest
 ' || echo "npm update reported an issue (continuing)"
 
 echo "--- Restarting the command center"
