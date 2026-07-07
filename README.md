@@ -149,7 +149,7 @@ auto-update runs it for you after each update.
             └── skills/            triage, inventory, add-server, proxmox,
                                    truenas, truenas-middleware, docker,
                                    host (linux), network, backup-restore,
-                                   security-audit
+                                   security-audit, patch-management, deploy-app
 
 ## Platform notes
 

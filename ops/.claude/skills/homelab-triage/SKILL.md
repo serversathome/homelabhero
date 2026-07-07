@@ -45,7 +45,12 @@ Walk the escalation ladder from CLAUDE.md and pick the matching skill:
 - A whole VM or container host is off or thrashing -> proxmox-ops
 - Storage errors, pool degraded, dataset missing, disk failing -> truenas-ops
 - Broad unreachability, DNS, mesh, tunnels, switch -> network-diag
-- "What is running / what changed" across the estate -> inventory skill (hh inventory)
+- "What is running / what changed" across the estate -> inventory skill; run
+  `hh diff` to see exactly what changed since the last saved snapshot (a recent
+  change is often the cause)
+- Need to restore, roll back, or verify a backup exists -> backup-restore
+
+Not a fault but a "is this exposed / are we patched" question -> security-audit.
 
 ## Step 4: report before acting
 
