@@ -14,9 +14,8 @@ description: >
 
 Read-only first. Sweep a host (or all hosts) for common exposure, report findings
 ranked by risk, then propose hardening for the user to approve. Everything runs
-through `hh run <alias> "<command>"`; on non-root hosts prefix privileged checks
-with `sudo -n` (see CLAUDE.md). Change nothing without an explicit go-ahead - this
-is diagnosis.
+through `hh run <alias> "<command>"`. Change nothing without an explicit go-ahead -
+this is diagnosis.
 
 ## Checks (per host)
 
@@ -28,12 +27,12 @@ Patching:
 
 Listening services / exposure (the highest-signal check):
 
-    sudo -n ss -tulpn                                   # what listens, on which IPs
+    ss -tulpn                                   # what listens, on which IPs
     # Flag anything bound to 0.0.0.0 / :: that should be LAN- or localhost-only.
 
 SSH hardening:
 
-    sudo -n sshd -T 2>/dev/null | grep -Ei \
+    sshd -T 2>/dev/null | grep -Ei \
       'permitrootlogin|passwordauthentication|pubkeyauthentication|permitemptypasswords'
     # Want: PermitRootLogin no|prohibit-password, PasswordAuthentication no,
     #       PubkeyAuthentication yes, PermitEmptyPasswords no.
@@ -42,17 +41,17 @@ Accounts and privilege:
 
     awk -F: '$3==0{print $1}' /etc/passwd               # UID-0 accounts (expect only root)
     getent passwd | awk -F: '$7 ~ /(bash|sh|zsh)$/{print $1}'   # login shells
-    sudo -n awk -F: '($2==""){print $1}' /etc/shadow    # empty passwords (should be none)
-    sudo -n cat /etc/sudoers /etc/sudoers.d/* 2>/dev/null | grep -v '^#'  # broad NOPASSWD?
+    awk -F: '($2==""){print $1}' /etc/shadow    # empty passwords (should be none)
+    cat /etc/sudoers /etc/sudoers.d/* 2>/dev/null | grep -v '^#'  # broad NOPASSWD?
 
 Intrusion signals:
 
-    sudo -n lastb 2>/dev/null | head                    # failed logins
-    sudo -n grep -iE 'fail|invalid user' /var/log/auth.log 2>/dev/null | tail
+    lastb 2>/dev/null | head                    # failed logins
+    grep -iE 'fail|invalid user' /var/log/auth.log 2>/dev/null | tail
 
 Firewall (is anything actually filtering?):
 
-    sudo -n nft list ruleset 2>/dev/null || sudo -n iptables -S 2>/dev/null || ufw status
+    nft list ruleset 2>/dev/null || iptables -S 2>/dev/null || ufw status
 
 ## Platform specifics
 

@@ -15,17 +15,12 @@ Confirm the target with `hh list`, then read capabilities/linux.md for the full
 toolset. Diagnose read-only first, then propose changes and confirm before
 anything state-changing.
 
-If `hh list` shows this host connects as a non-root user, prefix privileged
-commands with `sudo -n` (process names in `ss -p`, some `journalctl`, service
-restarts, package installs). It is harmless when the host connects as root, so
-when in doubt include it. See CLAUDE.md.
-
 ## Fast path
 
     hh run <alias> "systemctl --failed"                       # failed units first
     hh run <alias> "uptime; free -h; df -h"                   # pressure + space
-    hh run <alias> "sudo -n ss -tulpn"                        # what is listening (PIDs need root)
-    hh run <alias> "sudo -n journalctl -p err -b --no-pager | tail -40"
+    hh run <alias> "ss -tulpn"                                 # what is listening
+    hh run <alias> "journalctl -p err -b --no-pager | tail -40"
 
 ## Common cases
 
