@@ -20,10 +20,19 @@ through a broker that holds the credentials for you:
     hh test <alias>               # connectivity check
     hh overview                   # read-only vitals sweep across all hosts
     hh inventory                  # what is RUNNING everywhere (VMs, LXCs, containers, apps)
+    hh diff                       # inventory drift vs the last saved snapshot
     hh scan [cidr]                # discover live endpoints on the network (read-only)
 
 hh run works the same for every host: TrueNAS, Proxmox, and any Linux box are all
 reached as a normal shell over SSH.
+
+Some hosts connect as a non-root admin user, not root: `hh list` shows the connect
+user per host. On modern TrueNAS that user is `truenas_admin` (root SSH is
+disabled). Privileged commands there (zpool, midclt, qm, pct, docker, virsh) need
+`sudo`, so run them as, e.g., `hh run <alias> "sudo -n zpool status"`. Plain reads
+(uptime, df, ls, cat) do not. The built-in `hh overview` and `hh inventory`
+already add sudo automatically for non-root hosts; you only need it for your own
+ad-hoc `hh run` commands.
 
 Start any "what do we have / what is the state" task with hh list, then
 hh overview and hh inventory. Do not assume host names or guests; read them live.
