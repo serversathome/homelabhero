@@ -19,6 +19,55 @@ say()  { printf '\n\033[1;36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
 
+# ---------------------------------------------------------------------------
+# Preflight. HomelabHero needs a real Linux instance (LXC or VM) with working
+# systemd and working sudo privilege escalation. Both TrueNAS and Proxmox LXCs
+# qualify once configured correctly; a bare Docker "app" or a locked-down Incus
+# container does not. Fail fast here with an actionable message instead of
+# breaking cryptically halfway through (or, worse, only later at runtime).
+preflight() {
+  # no_new_privs stops sudo from gaining root, and the broker runs through sudo,
+  # so nothing works until it is cleared. This is the flag behind the TrueNAS
+  # "no new privileges" install failure. The lever to clear it differs by
+  # container manager (TrueNAS moved from Incus to libvirt between 25.x and 26),
+  # so keep the message tool-agnostic rather than prescribe commands that only
+  # apply to one of them.
+  if grep -qs '^NoNewPrivs:[[:space:]]*1' /proc/self/status; then
+    cat >&2 <<'EOF'
+
+[error] This container has the "no new privileges" (no_new_privs) flag set, which
+        stops sudo from gaining root. HomelabHero's connection broker runs through
+        sudo, so nothing works until that flag is cleared.
+
+        Unprivileged container managers set this flag. To fix it:
+
+          - Proxmox LXC works as-is (the flag is not set there by default).
+
+          - On TrueNAS, recreate the instance as "privileged". TrueNAS switched
+            its container backend from Incus (25.x) to libvirt (26), so the exact
+            toggle moved between versions and some builds keep the flag on even
+            when privileged. If it still fails after that, run HomelabHero in a
+            VM instead: a VM has its own kernel and none of these restrictions.
+
+        Then re-run this installer inside the instance.
+EOF
+    die "no_new_privs is set; sudo cannot escalate to root (see above)."
+  fi
+
+  # The command center is installed and run as a systemd service.
+  if [ ! -d /run/systemd/system ]; then
+    cat >&2 <<'EOF'
+
+[error] systemd is not the init system here. HomelabHero runs its command center
+        as a systemd service, so it needs a systemd-based instance: a normal
+        Ubuntu/Debian LXC (TrueNAS Instances or Proxmox) or a VM. A bare Docker
+        container is not enough.
+EOF
+    die "systemd not detected (no /run/systemd/system)."
+  fi
+}
+preflight
+
 # Root (typical on a fresh LXC) or a sudo-capable user, both work.
 if [ "$(id -u)" -eq 0 ]; then
   SUDO=""
@@ -35,7 +84,7 @@ say "1/10  OS prerequisites"
 $SUDO apt-get update -y
 $SUDO apt-get install -y --no-install-recommends \
   sudo git curl ca-certificates build-essential openssh-client sshpass \
-  tmux jq ripgrep rsync unzip iputils-ping dnsutils netcat-openbsd nmap
+  tmux jq ripgrep rsync unzip iputils-ping dnsutils netcat-openbsd nmap acl
 
 # ---------------------------------------------------------------------------
 say "2/10  Privilege-separated users"
@@ -95,6 +144,17 @@ sudo -u "$AGENT_USER" mkdir -p "${AGENT_HOME}/homelab-ops"
 $SUDO rsync -a --ignore-existing "${REPO_ROOT}/ops/" "${AGENT_HOME}/homelab-ops/"
 $SUDO chown -R "$AGENT_USER:$AGENT_USER" "${AGENT_HOME}/homelab-ops"
 sudo -u "$AGENT_USER" -H bash -lc "cd ~/homelab-ops && [ -d .git ] || (git init -q && git add -A && git -c user.name='HomelabHero' -c user.email='homelabhero@localhost' commit -q -m 'HomelabHero scaffold')" || true
+
+# The low-privilege agent user must be able to READ its ops brain. On TrueNAS/ZFS
+# an inherited NFSv4 ACL can deny this even when the mode bits look right (644),
+# which otherwise surfaces later as "cannot read CLAUDE.md". Catch it now and
+# print the exact fix rather than leaving a broken command center.
+if ! sudo -u "$AGENT_USER" test -r "${AGENT_HOME}/homelab-ops/CLAUDE.md"; then
+  warn "Agent user '${AGENT_USER}' cannot read ${AGENT_HOME}/homelab-ops/CLAUDE.md."
+  warn "This is usually a ZFS/NFSv4 ACL overriding the file mode (common on TrueNAS)."
+  warn "Fix it, then re-run 'hh doctor':"
+  warn "    sudo setfacl -R -m u:${AGENT_USER}:rX '${AGENT_HOME}/homelab-ops'"
+fi
 
 # ---------------------------------------------------------------------------
 say "7/10  Node (nvm) + Claude Code + claudecodeui, as ${AGENT_USER}"
