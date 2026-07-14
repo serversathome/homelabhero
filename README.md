@@ -1,3 +1,11 @@
+<p align="center">
+  <a href="https://youtu.be/dqKj2zKW1Ys">
+    <img src="https://img.youtube.com/vi/dqKj2zKW1Ys/maxresdefault.jpg" width="600" alt="Watch the video">
+  </a>
+  <br>
+  <em> [ ▸ ] Watch it on YouTube</em>
+</p>
+
 # HomelabHero
 
 Turn a fresh LXC into an AI homelab command center. One command installs Claude
