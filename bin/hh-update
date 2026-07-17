@@ -24,7 +24,10 @@ echo "--- Claude Code + claudecodeui"
 runuser -l "$AGENT_USER" -c '
   export NVM_DIR="$HOME/.nvm"
   [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-  npm install -g @anthropic-ai/claude-code@latest @cloudcli-ai/cloudcli@latest
+  # --allow-scripts: npm v12+ blocks postinstall by default, which would leave
+  # the claude binary uncreated on every weekly reinstall. Allow it explicitly.
+  npm install -g --allow-scripts=@anthropic-ai/claude-code,@cloudcli-ai/cloudcli \
+    @anthropic-ai/claude-code@latest @cloudcli-ai/cloudcli@latest
 ' || echo "npm update reported an issue (continuing)"
 
 echo "--- Restarting the command center"

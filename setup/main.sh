@@ -165,7 +165,12 @@ export NVM_DIR="$HOME/.nvm"
 . "$NVM_DIR/nvm.sh"
 nvm install --lts
 nvm alias default 'lts/*'
-npm install -g @anthropic-ai/claude-code @cloudcli-ai/cloudcli
+# npm v12+ blocks dependency install scripts by default. Claude Code's postinstall
+# (node install.cjs) is what creates the `claude` binary, so it must be explicitly
+# allowed for this global install, or the package lands on disk with no binary.
+# Older npm ignores the flag and runs scripts anyway, so this is safe everywhere.
+npm install -g --allow-scripts=@anthropic-ai/claude-code,@cloudcli-ai/cloudcli \
+  @anthropic-ai/claude-code @cloudcli-ai/cloudcli
 AGENT
 
 # Resolve node/cloudcli in a shell that actually has nvm loaded. A login shell
@@ -174,12 +179,17 @@ AGENT
 nvm_run() { sudo -u "$AGENT_USER" -H bash -c "export NVM_DIR=\"${AGENT_HOME}/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\" >/dev/null 2>&1; $*"; }
 NODE_BIN="$(nvm_run 'dirname "$(command -v node)"' 2>/dev/null)" || true
 CLOUDCLI="$(nvm_run 'command -v cloudcli' 2>/dev/null)" || true
+CLAUDE_BIN="$(nvm_run 'command -v claude' 2>/dev/null)" || true
 NODE_MAJOR="$(nvm_run 'node -p "process.versions.node.split(\".\")[0]"' 2>/dev/null)" || true
 NODE_VER="$(nvm_run 'node -v' 2>/dev/null)" || true
 [ -n "$NODE_BIN" ] || die "node not found after install (nvm did not load)."
 [ -n "$CLOUDCLI" ] || die "cloudcli not found after install."
+# The claude binary is created by claude-code's postinstall. If it is missing,
+# npm blocked that script (see the --allow-scripts flag above) - fail loudly with
+# the fix rather than shipping a UI that cannot find claude.
+[ -n "$CLAUDE_BIN" ] || die "claude binary not found after install (npm likely blocked its postinstall). Re-run as ${AGENT_USER}: npm install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code"
 [ "${NODE_MAJOR:-0}" -ge "$NODE_LTS_MIN" ] || die "Node ${NODE_MAJOR:-?} < ${NODE_LTS_MIN}."
-say "    node ${NODE_VER}  cloudcli ${CLOUDCLI}"
+say "    node ${NODE_VER}  cloudcli ${CLOUDCLI}  claude ${CLAUDE_BIN}"
 
 # ---------------------------------------------------------------------------
 say "8/10  Service (homelab-cc)"
