@@ -51,6 +51,7 @@ UI's built-in terminal, but the normal experience is the browser.
     hh add-host                  register a host (operator)
     hh rm-host <alias>           remove a host and its credential
     hh update                    update the OS + Claude now (operator)
+    hh upgrade                   pull the latest HomelabHero code + skills now (operator)
     hh login                     log Claude Code in as the agent user
     hh audit [lines]             review the broker audit log (operator)
     hh version                   print the HomelabHero version
@@ -129,6 +130,33 @@ packages and Claude, restarts the command center, and runs a health check, loggi
 everything to `/var/log/homelabhero-update.log`. Edit that one file to change the
 schedule, or delete it to turn auto-update off. Run it on demand with `hh update`.
 
+### Staying up to date with HomelabHero itself
+
+The same weekly job also self-updates HomelabHero. Before the OS/Claude update, it
+runs `hh-upgrade`, which `git pull`s the release you installed from and refreshes the
+installed pieces in place - the `hh` CLI, the broker, and the shipped skills,
+`CLAUDE.md`, and capability docs. So improvements and fixes pushed to the repo reach
+existing boxes on their own; nobody has to re-run the installer. It no-ops quietly
+when there is nothing new. Run it on demand with `hh upgrade`.
+
+What it will and will not touch is deliberate:
+
+- **Refreshed** (HomelabHero-owned): the CLI binaries, `.claude/skills/`,
+  `.claude/settings.json`, `CLAUDE.md`, `capabilities/`, and the logrotate/sudoers
+  templates. An in-place edit to one of these *shipped* files will be overwritten -
+  customize instead by adding your own skill, using `settings.local.json`, or filling
+  in the notes below.
+- **Never touched** (yours): your environment notes under `infra/`, `inventory/`,
+  `runbooks/`, `hosts/`, your edited cron schedule, and `cloudcli.env`. Your own
+  custom skills in `.claude/skills/` are preserved too. Ops-brain changes land in the
+  working tree, so `git -C ~hhagent/homelab-ops diff` shows exactly what an upgrade
+  changed.
+
+One bootstrapping limit: self-update only heals boxes that installed successfully and
+can reach the weekly job. A bug in the installer's early steps still needs a re-run of
+the one-liner. The systemd service unit is also not regenerated here (its node paths
+are resolved at install time); if that template changes, re-run the installer.
+
 Because an update can occasionally break something, `hh doctor` checks the whole
 chain in one pass: the users, the broker, vault permissions, the service, Claude's
 version, every host's reachability, and the last update result. Run it any time; the
@@ -143,7 +171,8 @@ auto-update runs it for you after each update.
     │   ├── hh                     control CLI (agent- and operator-facing)
     │   ├── hh-connect             privileged broker (runs as hhvault)
     │   ├── hh-provision           key-only host registration (UI-safe add)
-    │   └── hh-update              OS + Claude updater (run by cron / hh update)
+    │   ├── hh-update              OS + Claude updater (run by cron / hh update)
+    │   └── hh-upgrade             self-updater: git pull + refresh installed files
     ├── templates/                 sudoers, systemd unit, cron job, cloudcli env,
     │                              logrotate rules, bash completion
     └── ops/                       becomes ~hhagent/homelab-ops (git-backed)

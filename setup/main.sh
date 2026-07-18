@@ -116,6 +116,16 @@ $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-connect" /usr/local/bi
 $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh"         /usr/local/bin/hh
 $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-update"  /usr/local/bin/hh-update
 $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-provision" /usr/local/bin/hh-provision
+$SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-upgrade" /usr/local/bin/hh-upgrade
+# Record where this git checkout lives (non-secret) so hh-upgrade can pull future
+# releases and refresh the installed files in place, weekly via hh-update. Branch
+# and remote come from the checkout itself so custom forks/branches keep working.
+HH_BRANCH_NOW="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)"
+[ "$HH_BRANCH_NOW" = "HEAD" ] && HH_BRANCH_NOW="main"
+HH_REPO_NOW="$(git -C "$REPO_ROOT" remote get-url origin 2>/dev/null || echo https://github.com/serversathome/homelabhero.git)"
+printf 'CHECKOUT=%s\nBRANCH=%s\nREPO=%s\n' "$REPO_ROOT" "$HH_BRANCH_NOW" "$HH_REPO_NOW" \
+  | $SUDO tee "${CFG_DIR}/install.conf" >/dev/null
+$SUDO chown root:root "${CFG_DIR}/install.conf"; $SUDO chmod 644 "${CFG_DIR}/install.conf"
 # Bash completion for the hh CLI (subcommands + host aliases).
 $SUDO install -o root -g root -m 644 "${REPO_ROOT}/templates/hh.completion" /etc/bash_completion.d/hh
 # Weekly OS + Claude auto-update (edit or delete /etc/cron.d/homelabhero to change)
