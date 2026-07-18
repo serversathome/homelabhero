@@ -4,7 +4,7 @@
 _hh() {
   local cur sub subs aliases
   cur="${COMP_WORDS[COMP_CWORD]}"
-  subs="list run test overview inventory scan doctor provision add-host rm-host update upgrade login version help"
+  subs="list run test overview inventory scan doctor provision add-host rm-host update login version help"
 
   if [ "$COMP_CWORD" -eq 1 ]; then
     mapfile -t COMPREPLY < <(compgen -W "$subs" -- "$cur")

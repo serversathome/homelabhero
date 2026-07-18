@@ -1,7 +1,8 @@
-# HomelabHero weekly auto-update.
-# Updates the OS packages and Claude, restarts the command center, and runs a
-# health check. Output is appended to /var/log/homelabhero-update.log so you can
-# always see what happened:  tail /var/log/homelabhero-update.log
+# HomelabHero weekly auto-update. One command runs everything: hh-update updates
+# HomelabHero itself (CLI, skills, Node/npm at latest LTS, the service) by
+# re-running the installer, then updates the OS packages and runs a health check.
+# Output is appended to /var/log/homelabhero-update.log (tail it to see what
+# happened).
 #
 # The five time fields are: minute hour day-of-month month day-of-week.
 # Default below = every Sunday at 04:00. Edit the line to change the schedule,

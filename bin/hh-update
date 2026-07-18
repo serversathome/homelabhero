@@ -1,48 +1,81 @@
 #!/usr/bin/env bash
 #
-# hh-update - update the OS packages and Claude, restart the UI, and run a
-# health check. Run as root (the weekly cron job calls it, and `hh update`
-# invokes it via sudo). Deliberately does NOT use `set -e`: if one step has a
-# hiccup we still want the rest to run and the log to be complete.
+# hh-update - the single HomelabHero maintenance command: bring EVERYTHING up to
+# date in one run. Run as root (`hh update` invokes it via sudo; the weekly cron
+# runs it directly). One command runs everything, on demand:
+#
+#   1. HomelabHero itself - CLI, skills, CLAUDE.md, capabilities, Node/npm at
+#      latest LTS, the claude/cloudcli packages, and the systemd unit - by pulling
+#      the latest release and re-running the installer non-interactively.
+#   2. The OS packages (apt).
+#   3. A health check (hh doctor).
+#
+# No `set -e`: a hiccup in one step must not skip the rest or truncate the log.
 #
 set -uo pipefail
 export DEBIAN_FRONTEND=noninteractive
-AGENT_USER="hhagent"
+
+CFG_DIR="/etc/homelabhero"
+INSTALL_CONF="${CFG_DIR}/install.conf"
 
 echo "=================================================="
 echo "HomelabHero update starting: $(date '+%Y-%m-%d %H:%M:%S %Z')"
 
-# Refresh HomelabHero itself (CLI + skills) FIRST, so a released fix reaches this
-# box before the rest of the update runs. hh-upgrade replaces our own file on
-# disk with a new inode; this running copy finishes on its old inode and the new
-# hh-update logic takes effect next run. No-ops quietly when already current.
-if [ -x /usr/local/bin/hh-upgrade ]; then
-  /usr/local/bin/hh-upgrade || echo "self-update reported an issue (continuing)"
-else
-  echo "--- hh-upgrade not installed; skipping code self-update (re-run the installer to enable it)"
-fi
+conf_get() { awk -F= -v k="$2" '$1==k{sub(/^[^=]*=/,"");gsub(/^[ "]+|[ "]+$/,"");print;exit}' "$1"; }
 
+# --- 1. HomelabHero itself: pull the latest release, then re-run the installer
+#        non-interactively. The installer is the single source of truth - it lays
+#        down the CLI, refreshes the ops brain (shipped files overwritten, user
+#        notes preserved), installs Node at latest LTS + the packages with the
+#        correct --allow-scripts set, regenerates the unit, and restarts the
+#        service. HH_NONINTERACTIVE=1 skips only sign-in and add-servers.
+self_update() {
+  if [ ! -f "$INSTALL_CONF" ]; then
+    echo "--- no ${INSTALL_CONF}; skipping self-update (re-run the installer once to enable it)"
+    return 0
+  fi
+  local checkout branch repo old new
+  checkout="$(conf_get "$INSTALL_CONF" CHECKOUT)"
+  branch="$(conf_get "$INSTALL_CONF" BRANCH)"; [ -n "$branch" ] || branch="main"
+  repo="$(conf_get "$INSTALL_CONF" REPO)"
+  [ -n "$checkout" ] || { echo "--- install.conf has no CHECKOUT; skipping self-update"; return 0; }
+  command -v git >/dev/null 2>&1 || { echo "--- git not installed; skipping self-update"; return 0; }
+
+  # Ensure the source checkout is present; re-clone if it went missing.
+  if [ ! -d "$checkout/.git" ]; then
+    [ -n "$repo" ] || { echo "--- checkout ${checkout} missing and no REPO recorded; skipping self-update"; return 0; }
+    echo "--- checkout ${checkout} missing; re-cloning ${repo} (${branch})"
+    rm -rf "$checkout"
+    git clone --depth 1 --branch "$branch" "$repo" "$checkout" >/dev/null 2>&1 \
+      || { echo "--- clone failed (offline?); skipping self-update"; return 0; }
+  fi
+
+  old="$(git -C "$checkout" rev-parse HEAD 2>/dev/null || echo none)"
+  git -C "$checkout" fetch --depth 1 origin "$branch" >/dev/null 2>&1 \
+    || { echo "--- git fetch failed (offline?); keeping the current version"; return 0; }
+  git -C "$checkout" reset --hard "origin/${branch}" >/dev/null 2>&1 \
+    || { echo "--- git reset failed; keeping the current version"; return 0; }
+  new="$(git -C "$checkout" rev-parse HEAD 2>/dev/null || echo none)"
+
+  if [ "$old" = "$new" ]; then
+    echo "--- code already current (${new:0:7}); re-running the installer to keep Node/deps at latest LTS"
+  else
+    echo "--- updated ${old:0:7} -> ${new:0:7}; re-running the installer to apply it"
+  fi
+  [ -f "$checkout/setup/main.sh" ] || { echo "--- installer not found at ${checkout}/setup/main.sh; skipping self-update"; return 0; }
+  HH_NONINTERACTIVE=1 bash "$checkout/setup/main.sh" || echo "--- installer reported an issue (continuing)"
+}
+
+echo "--- HomelabHero self-update (code, skills, Node/npm)"
+if [ "$(id -u)" -eq 0 ]; then self_update; else echo "--- not root; skipping self-update"; fi
+
+# --- 2. OS packages.
 echo "--- OS packages"
 apt-get update -y
 apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade
 apt-get -y autoremove --purge
 
-echo "--- Claude Code + claudecodeui"
-# Reinstall at @latest rather than `npm update`: a plain global `npm update`
-# will not move a package across a major version, so it can silently stall on an
-# old major. `install ...@latest` always pulls the current release.
-runuser -l "$AGENT_USER" -c '
-  export NVM_DIR="$HOME/.nvm"
-  [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-  # --allow-scripts: npm v12+ blocks postinstall by default, which would leave
-  # the claude binary uncreated on every weekly reinstall. Allow it explicitly.
-  npm install -g --allow-scripts=@anthropic-ai/claude-code,@cloudcli-ai/cloudcli \
-    @anthropic-ai/claude-code@latest @cloudcli-ai/cloudcli@latest
-' || echo "npm update reported an issue (continuing)"
-
-echo "--- Restarting the command center"
-systemctl restart homelab-cc
-
+# --- 3. Health check.
 echo "--- Health check"
 /usr/local/bin/hh doctor || echo "doctor reported problems (see above)"
 

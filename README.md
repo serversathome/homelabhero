@@ -47,12 +47,11 @@ credentials, your registered hosts (your `hh list` is left exactly as-is), and
 your ops notes. It skips Claude sign-in if you are already signed in. Safe to run
 any time, and it is the way to force the very latest immediately.
 
-Most updates also arrive on their own: the weekly job self-updates the `hh` CLI
-and the shipped skills in place (see [Staying up to date](#staying-up-to-date-with-homelabhero-itself)).
-But some changes can only come from the installer - anything in its early setup
-steps, the systemd service unit, or bootstrapping self-update itself on an older
-box - so when in doubt, re-run the one-liner above. It will not disturb your
-configuration.
+You rarely need to do this by hand, though: `hh update` runs this exact installer
+for you (non-interactively) and then patches the OS, and the weekly job runs it
+automatically (see [Staying up to date](#staying-up-to-date-with-homelabhero-itself)).
+Re-running the one-liner is just the manual equivalent - handy to force the very
+latest right now, or to onboard a box that predates self-update.
 
 ## Commands
 
@@ -70,8 +69,7 @@ configuration.
 
     hh add-host                  register a host (operator)
     hh rm-host <alias>           remove a host and its credential
-    hh update                    update the OS + Claude now (operator)
-    hh upgrade                   pull the latest HomelabHero code + skills now (operator)
+    hh update                    update everything now: HomelabHero + OS (operator)
     hh login                     log Claude Code in as the agent user
     hh audit [lines]             review the broker audit log (operator)
     hh version                   print the HomelabHero version
@@ -145,45 +143,50 @@ admin, since a password can't be handled safely in an LLM session.
 
 ## Auto-updates and health
 
-A weekly cron job (`/etc/cron.d/homelabhero`, Sundays at 04:00) updates the OS
-packages and Claude, restarts the command center, and runs a health check, logging
-everything to `/var/log/homelabhero-update.log`. Edit that one file to change the
-schedule, or delete it to turn auto-update off. Run it on demand with `hh update`.
+One command does everything. A weekly cron job (`/etc/cron.d/homelabhero`, Sundays at
+04:00) runs `hh update`, logging to `/var/log/homelabhero-update.log`. Edit that one
+file to change the schedule, or delete it to turn auto-update off. Run it any time with
+`hh update`.
+
+`hh update` does three things in order:
+
+1. **Update HomelabHero itself** (see below).
+2. **Update the OS packages** (`apt`).
+3. **Run a health check** (`hh doctor`).
 
 ### Staying up to date with HomelabHero itself
 
-The same weekly job also self-updates HomelabHero. Before the OS/Claude update, it
-runs `hh-upgrade`, which `git pull`s the release you installed from and refreshes the
-installed pieces in place - the `hh` CLI, the broker, and the shipped skills,
-`CLAUDE.md`, and capability docs. So improvements and fixes pushed to the repo reach
-existing boxes on their own; nobody has to re-run the installer. It no-ops quietly
-when there is nothing new. Run it on demand with `hh upgrade`.
+For step 1, `hh update` `git pull`s the release you installed from and **re-runs the
+installer non-interactively** - so an update produces exactly what a fresh install does:
+the `hh` CLI and broker, the shipped skills / `CLAUDE.md` / capability docs, Node and
+npm at the latest LTS, the Claude Code + claudecodeui packages (reinstalled with the
+correct `--allow-scripts` set so their native modules always build), and the systemd
+unit. Improvements and fixes pushed to the repo reach existing boxes on their own;
+nobody has to re-run the installer by hand.
+
+Because it re-runs the real installer, there is no "some changes only the installer can
+apply" gap - `hh update` **is** the installer, plus the OS pass. Node tracks the latest
+LTS automatically each week.
 
 What it will and will not touch is deliberate:
 
 - **Refreshed** (HomelabHero-owned): the CLI binaries, `.claude/skills/`,
-  `.claude/settings.json`, `CLAUDE.md`, `capabilities/`, and the logrotate/sudoers
-  templates. An in-place edit to one of these *shipped* files will be overwritten -
-  customize instead by adding your own skill, using `settings.local.json`, or filling
-  in the notes below.
+  `.claude/settings.json`, `CLAUDE.md`, `capabilities/`, the logrotate/sudoers/service
+  templates, and the Node/npm stack. An in-place edit to one of these *shipped* files
+  will be overwritten - customize instead by adding your own skill, using
+  `settings.local.json`, or filling in the notes below.
 - **Never touched** (yours): your environment notes under `infra/`, `inventory/`,
   `runbooks/`, `hosts/`, your edited cron schedule, and `cloudcli.env`. Your own
   custom skills in `.claude/skills/` are preserved too. Ops-brain changes land in the
-  working tree, so `git -C ~hhagent/homelab-ops diff` shows exactly what an upgrade
+  working tree, so `git -C ~hhagent/homelab-ops diff` shows exactly what an update
   changed.
 
-`hh-upgrade` also **self-heals a missing `claude` binary** on every run. That binary
-is created by claude-code's postinstall, which a newer npm can block by default,
-leaving Claude installed but unable to start (the failure behind issue #11). If it is
-missing, `hh upgrade` reinstalls with the postinstall allowed and restarts the UI - so
-`hh upgrade` alone repairs that box, no installer re-run needed.
-
-One bootstrapping limit remains: self-update only heals boxes that installed
-successfully and can reach the weekly job. A handful of changes can come only from the
-installer - its own early setup steps, system provisioning (users, sudoers), and the
-systemd service unit (its node paths are resolved at install time). When a pull touches
-one of those, `hh-upgrade` says so in its log and points you at the one-liner. Re-run
-it to apply them; it keeps your configuration.
+The installer also always reasserts the `claude` binary with the postinstall allowed,
+so the "installed but cannot start" failure (issue #11, a newer npm blocking install
+scripts) self-heals on every update. One bootstrapping limit remains: self-update only
+reaches boxes that installed successfully and can run the weekly job, and a box that
+predates self-update needs **one** manual re-run of the one-liner to enable it (that
+writes `/etc/homelabhero/install.conf`, after which it maintains itself).
 
 Because an update can occasionally break something, `hh doctor` checks the whole
 chain in one pass: the users, the broker, vault permissions, the service, Claude's
@@ -199,8 +202,8 @@ auto-update runs it for you after each update.
     │   ├── hh                     control CLI (agent- and operator-facing)
     │   ├── hh-connect             privileged broker (runs as hhvault)
     │   ├── hh-provision           key-only host registration (UI-safe add)
-    │   ├── hh-update              OS + Claude updater (run by cron / hh update)
-    │   └── hh-upgrade             self-updater: git pull + refresh installed files
+    │   └── hh-update              the one update command: git pull + re-run
+    │                              installer headless, then OS packages + doctor
     ├── templates/                 sudoers, systemd unit, cron job, cloudcli env,
     │                              logrotate rules, bash completion
     └── ops/                       becomes ~hhagent/homelab-ops (git-backed)

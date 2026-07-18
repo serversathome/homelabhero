@@ -34,7 +34,6 @@
       "Bash(scp:*)",
       "Bash(sudo:*)",
       "Bash(hh update)",
-      "Bash(hh upgrade)",
       "Bash(hh add-host:*)",
       "Bash(hh rm-host:*)",
       "Bash(hh scan --add)",

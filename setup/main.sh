@@ -14,6 +14,11 @@ CFG_DIR="/etc/homelabhero"
 VAULT_DIR="${CFG_DIR}/vault"
 REG_DIR="${CFG_DIR}/hosts.d"
 NODE_LTS_MIN=22
+# Non-interactive mode. `hh update` re-runs this installer headless (weekly via
+# cron and on demand) with HH_NONINTERACTIVE=1, which skips only the two
+# interactive steps - Claude sign-in (9) and adding servers (10). Everything else
+# is idempotent, so an update produces exactly what a fresh install does.
+HH_NONINTERACTIVE="${HH_NONINTERACTIVE:-0}"
 
 say()  { printf '\n\033[1;36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
@@ -116,10 +121,12 @@ $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-connect" /usr/local/bi
 $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh"         /usr/local/bin/hh
 $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-update"  /usr/local/bin/hh-update
 $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-provision" /usr/local/bin/hh-provision
-$SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-upgrade" /usr/local/bin/hh-upgrade
-# Record where this git checkout lives (non-secret) so hh-upgrade can pull future
-# releases and refresh the installed files in place, weekly via hh-update. Branch
-# and remote come from the checkout itself so custom forks/branches keep working.
+# hh-upgrade was merged into hh-update (one `hh update` command does everything);
+# remove the retired binary from boxes that had it.
+$SUDO rm -f /usr/local/bin/hh-upgrade
+# Record where this git checkout lives (non-secret) so hh-update can pull future
+# releases and re-run this installer, weekly. Branch and remote come from the
+# checkout itself so custom forks/branches keep working.
 HH_BRANCH_NOW="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)"
 [ "$HH_BRANCH_NOW" = "HEAD" ] && HH_BRANCH_NOW="main"
 HH_REPO_NOW="$(git -C "$REPO_ROOT" remote get-url origin 2>/dev/null || echo https://github.com/serversathome/homelabhero.git)"
@@ -128,8 +135,11 @@ printf 'CHECKOUT=%s\nBRANCH=%s\nREPO=%s\n' "$REPO_ROOT" "$HH_BRANCH_NOW" "$HH_RE
 $SUDO chown root:root "${CFG_DIR}/install.conf"; $SUDO chmod 644 "${CFG_DIR}/install.conf"
 # Bash completion for the hh CLI (subcommands + host aliases).
 $SUDO install -o root -g root -m 644 "${REPO_ROOT}/templates/hh.completion" /etc/bash_completion.d/hh
-# Weekly OS + Claude auto-update (edit or delete /etc/cron.d/homelabhero to change)
-$SUDO install -o root -g root -m 644 "${REPO_ROOT}/templates/cron.homelabhero" /etc/cron.d/homelabhero
+# Weekly auto-update (edit or delete /etc/cron.d/homelabhero to change). Install
+# only if absent: since `hh update` re-runs this installer, overwriting here every
+# week would silently revert a user's edited schedule.
+[ -f /etc/cron.d/homelabhero ] || \
+  $SUDO install -o root -g root -m 644 "${REPO_ROOT}/templates/cron.homelabhero" /etc/cron.d/homelabhero
 # Keep the logs from growing without bound.
 $SUDO install -o root -g root -m 644 "${REPO_ROOT}/templates/logrotate.homelabhero" /etc/logrotate.d/homelabhero
 [ -f /var/log/homelabhero-update.log ] || $SUDO install -o root -g root -m 644 /dev/null /var/log/homelabhero-update.log
@@ -150,9 +160,20 @@ rm -f "$TMP_SUDO"
 
 # ---------------------------------------------------------------------------
 say "6/10  Ops brain -> ${AGENT_HOME}/homelab-ops"
-sudo -u "$AGENT_USER" mkdir -p "${AGENT_HOME}/homelab-ops"
-$SUDO rsync -a --ignore-existing "${REPO_ROOT}/ops/" "${AGENT_HOME}/homelab-ops/"
-$SUDO chown -R "$AGENT_USER:$AGENT_USER" "${AGENT_HOME}/homelab-ops"
+OPS_DST="${AGENT_HOME}/homelab-ops"
+sudo -u "$AGENT_USER" mkdir -p "$OPS_DST"
+# Ownership split so a re-run (this is how `hh update` self-updates) DELIVERS shipped
+# updates without clobbering the user's own notes:
+#   * HomelabHero-owned, overwritten by content (--checksum catches a same-size
+#     edit): the skills, settings.json, capability docs, and CLAUDE.md. No
+#     --delete, so a user's OWN custom skill under .claude/skills/ survives.
+#   * User-owned, add-only: everything else (infra/, inventory/, runbooks/,
+#     hosts/) - new stubs are added, existing notes never overwritten.
+$SUDO rsync -a --checksum "${REPO_ROOT}/ops/.claude/"      "${OPS_DST}/.claude/"
+$SUDO rsync -a --checksum "${REPO_ROOT}/ops/capabilities/" "${OPS_DST}/capabilities/"
+$SUDO install -m 644 "${REPO_ROOT}/ops/CLAUDE.md" "${OPS_DST}/CLAUDE.md"
+$SUDO rsync -a --ignore-existing "${REPO_ROOT}/ops/" "${OPS_DST}/"
+$SUDO chown -R "$AGENT_USER:$AGENT_USER" "$OPS_DST"
 sudo -u "$AGENT_USER" -H bash -lc "cd ~/homelab-ops && [ -d .git ] || (git init -q && git add -A && git -c user.name='HomelabHero' -c user.email='homelabhero@localhost' commit -q -m 'HomelabHero scaffold')" || true
 
 # The low-privilege agent user must be able to READ its ops brain. On TrueNAS/ZFS
@@ -175,12 +196,28 @@ export NVM_DIR="$HOME/.nvm"
 . "$NVM_DIR/nvm.sh"
 nvm install --lts
 nvm alias default 'lts/*'
-# npm v12+ blocks dependency install scripts by default. Claude Code's postinstall
-# (node install.cjs) is what creates the `claude` binary, so it must be explicitly
-# allowed for this global install, or the package lands on disk with no binary.
-# Older npm ignores the flag and runs scripts anyway, so this is safe everywhere.
-npm install -g --allow-scripts=@anthropic-ai/claude-code,@cloudcli-ai/cloudcli \
-  @anthropic-ai/claude-code @cloudcli-ai/cloudcli
+# npm v12 BLOCKS dependency install scripts by default (v11 only warns). Those
+# scripts build native modules, so they must be explicitly allowed or the package
+# lands on disk broken. Allow the two first-party packages AND cloudcli's native
+# deps - better-sqlite3 (its DB), node-pty (the web terminal), bcrypt (auth) -
+# which are NOT covered transitively by allowing the top-level package. Older npm
+# ignores the flag and runs scripts anyway, so this is safe everywhere.
+allow="@anthropic-ai/claude-code,@cloudcli-ai/cloudcli,better-sqlite3,node-pty,bcrypt"
+if ! out="$(npm install -g --allow-scripts="$allow" \
+  @anthropic-ai/claude-code @cloudcli-ai/cloudcli 2>&1)"; then
+  printf '%s\n' "$out"; echo "[error] npm global install failed"; exit 1
+fi
+printf '%s\n' "$out"
+# Drift guard: if npm still flags ANY package as having uncovered install scripts,
+# a newer cloudcli pulled in a native dep we do not list. Surface the names loudly
+# so it is fixed before an npm-v12 box silently breaks, rather than letting a
+# hardcoded list quietly rot.
+missed="$(printf '%s\n' "$out" | sed -n 's/^npm warn allow-scripts[[:space:]]\{1,\}\([^ ]\{1,\}\)@.*/\1/p' | sort -u | paste -sd, -)"
+if [ -n "$missed" ]; then
+  echo "[warn] npm reports install scripts NOT in the allowlist: ${missed}"
+  echo "[warn] harmless on npm 11 (scripts still run) but they are BLOCKED on npm 12."
+  echo "[warn] add them to the allow-scripts list in setup/main.sh and re-run."
+fi
 AGENT
 
 # Resolve node/cloudcli in a shell that actually has nvm loaded. A login shell
@@ -197,7 +234,7 @@ NODE_VER="$(nvm_run 'node -v' 2>/dev/null)" || true
 # The claude binary is created by claude-code's postinstall. If it is missing,
 # npm blocked that script (see the --allow-scripts flag above) - fail loudly with
 # the fix rather than shipping a UI that cannot find claude.
-[ -n "$CLAUDE_BIN" ] || die "claude binary not found after install (npm likely blocked its postinstall). Re-run as ${AGENT_USER}: npm install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code"
+[ -n "$CLAUDE_BIN" ] || die "claude binary not found after install (npm likely blocked its postinstall). Re-run as ${AGENT_USER}: npm install -g --allow-scripts=@anthropic-ai/claude-code,@cloudcli-ai/cloudcli,better-sqlite3,node-pty,bcrypt @anthropic-ai/claude-code @cloudcli-ai/cloudcli"
 [ "${NODE_MAJOR:-0}" -ge "$NODE_LTS_MIN" ] || die "Node ${NODE_MAJOR:-?} < ${NODE_LTS_MIN}."
 say "    node ${NODE_VER}  cloudcli ${CLOUDCLI}  claude ${CLAUDE_BIN}"
 
@@ -211,7 +248,11 @@ sed -e "s|__AGENT_HOME__|${AGENT_HOME}|g" \
 $SUDO install -o root -g root -m 644 "$UNIT" /etc/systemd/system/homelab-cc.service
 rm -f "$UNIT"
 $SUDO systemctl daemon-reload
-$SUDO systemctl enable --now homelab-cc.service
+$SUDO systemctl enable homelab-cc.service >/dev/null 2>&1 || true
+# restart (not just enable --now): on an upgrade the service is already running, and
+# it must pick up the new unit, Node, and cloudcli/claude. On a fresh install this
+# simply starts it. This is why hh-update no longer restarts separately.
+$SUDO systemctl restart homelab-cc.service
 
 # ---------------------------------------------------------------------------
 echo
@@ -223,6 +264,8 @@ $SUDO systemctl --no-pager --full status homelab-cc.service | head -n 8 || true
 say "9/10  Sign Claude in (one time)"
 if $SUDO test -f "${AGENT_HOME}/.claude/.credentials.json" 2>/dev/null; then
   echo "Already signed in. Skipping."
+elif [ "$HH_NONINTERACTIVE" = 1 ]; then
+  warn "Not signed in, running non-interactively; skipping. Sign in from the web UI, or run 'hh login'."
 else
   cat <<'EOF'
 Claude needs to sign in to your Claude account once. A sign-in screen will
@@ -253,13 +296,24 @@ fi
 
 # ---------------------------------------------------------------------------
 say "10/10  Add your servers"
-echo "Looking for servers on your network you can add..."
-hh scan --add </dev/tty || warn "network scan did not complete"
-while [ "$(printf 'Add another server by hand? (y/N): ' >/dev/tty; read -r a </dev/tty || true; echo "${a:-N}")" = "y" ]; do
-  hh add-host </dev/tty || warn "add-host did not complete"
-done
+if [ "$HH_NONINTERACTIVE" = 1 ]; then
+  echo "Non-interactive; skipping server discovery. Add hosts anytime with 'hh add-host' or by asking Claude in the UI."
+else
+  echo "Looking for servers on your network you can add..."
+  hh scan --add </dev/tty || warn "network scan did not complete"
+  while [ "$(printf 'Add another server by hand? (y/N): ' >/dev/tty; read -r a </dev/tty || true; echo "${a:-N}")" = "y" ]; do
+    hh add-host </dev/tty || warn "add-host did not complete"
+  done
+fi
 
 # ---------------------------------------------------------------------------
+# On an upgrade (non-interactive) there is no user watching; a short line is
+# enough. The full browser hand-off banner is for a fresh, interactive install.
+if [ "$HH_NONINTERACTIVE" = 1 ]; then
+  say "HomelabHero is up to date."
+  exit 0
+fi
+
 # Hand off to the web UI. This is the last thing the user reads.
 IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
 [ -n "$IP" ] || IP="<this-lxc-ip>"
