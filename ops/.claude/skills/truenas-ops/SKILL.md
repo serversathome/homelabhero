@@ -31,6 +31,15 @@ For the complete command surface of this platform, read capabilities/truenas.md.
     hh run truenas "midclt call alert.list | jq '.[] | {level, formatted}'"
     hh run truenas "df -h; zfs list -o name,used,avail,refer,mountpoint"
 
+Mandatory before you call it healthy - scan the kernel log. Pools, SMART, and
+alert.list miss PCIe AER, NIC link flaps, ATA/disk resets, MCEs, and OOM kills;
+those only surface here:
+
+    hh run truenas "journalctl -k -b -p warning --no-pager | grep -viE 'veth|br-[0-9a-f]{12}' | tail -40"
+
+Empty output is the pass; read it before reporting green. See "Health check
+must-dos" in infra/truenas.md for the full rationale.
+
 ## Common cases
 
 - Pool DEGRADED / disk errors: `zpool status -v` names the vdev and disk.

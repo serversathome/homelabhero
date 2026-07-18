@@ -26,6 +26,20 @@ Run the overview sweep. It is read-only and safe.
 If you need the raw inventory first, `hh list` shows every registered host. To
 spot-check one, `hh run <alias> "uptime; df -h /"`.
 
+### Health check: never green without the kernel log
+
+`hh overview` and the pool/SMART/alert views miss a class of hardware and kernel
+faults - PCIe AER, NIC link flaps, ATA/disk resets, MCEs, and OOM kills. Before
+you report the homelab (or any TrueNAS host) healthy, scan the kernel ring
+buffer:
+
+    hh run truenas "journalctl -k -b -p warning --no-pager | grep -viE 'veth|br-[0-9a-f]{12}' | tail -40"
+
+Empty output is the pass. Any AER / MCE / ATA-reset / link-down / OOM line is a
+real finding - localize it (Step 3) before declaring green. Same principle for
+other hosts: a clean overview is not a clean dmesg. See "Health check must-dos"
+in infra/truenas.md for the full rationale.
+
 ## Step 2: check reachability and DNS early
 
 A surprising share of "everything is broken" reports are network, not the apps.

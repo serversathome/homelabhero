@@ -11,6 +11,27 @@ and host for a set of Docker apps plus the monitoring stack.
 - Replication targets / schedule: `<...>`
 - SMART / scrub schedule: `<...>`
 
+## Health check must-dos
+
+A green pool is not a green box. `zpool status`, `smartctl`, and
+`midclt call alert.list` report the storage and middleware view, but they are
+blind to a whole class of hardware and kernel faults that only surface in the
+kernel ring buffer: PCIe AER (bus / HBA errors), NIC link flaps, ATA/SATA/SAS
+disk resets and link downshifts, machine-check exceptions (MCE), and OOM kills.
+A NAS can show every pool ONLINE while its HBA throws AER corrections or a disk
+silently resets on its SATA link.
+
+So never declare TrueNAS healthy without also scanning the kernel log:
+
+    hh run truenas "journalctl -k -b -p warning --no-pager | grep -viE 'veth|br-[0-9a-f]{12}' | tail -40"
+
+That is kernel messages (`-k`), this boot only (`-b`), warning and above (`-p
+warning`), with Docker veth/bridge link churn filtered out - that noise is normal
+on an app host and would otherwise bury the real signal. Empty output is the
+pass. Any AER / MCE / ATA-reset / link-down / OOM line is a real finding: pivot
+to the matching subsystem (HBA/PCIe, NIC, the named disk, memory) before touching
+anything or reporting green.
+
 ## Pool and dataset health
 
     hh run truenas "zpool status -x"            # one-line all-healthy check
