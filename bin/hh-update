@@ -1,47 +1,24 @@
 #!/usr/bin/env bash
 #
-# hh-update - update the OS packages and Claude, restart the UI, and run a
-# health check. Run as root (the weekly cron job calls it, and `hh update`
-# invokes it via sudo). Deliberately does NOT use `set -e`: if one step has a
-# hiccup we still want the rest to run and the log to be complete.
+# hh-update - update the OS packages and run a health check. Run as root (`hh
+# update` invokes it via sudo; the weekly cron runs it after hh-upgrade).
+#
+# Scope is deliberately narrow: OS packages ONLY. HomelabHero itself - the CLI,
+# skills, Node/npm, and the service - is updated by hh-upgrade, which re-runs the
+# installer. Keeping node/app updates out of `hh update` means a plain `hh update`
+# is a quick, low-risk OS patch that never bumps Node or restarts the stack.
+# Deliberately no `set -e`: if one step hiccups we still want the rest to run.
 #
 set -uo pipefail
 export DEBIAN_FRONTEND=noninteractive
-AGENT_USER="hhagent"
 
 echo "=================================================="
-echo "HomelabHero update starting: $(date '+%Y-%m-%d %H:%M:%S %Z')"
-
-# Refresh HomelabHero itself (CLI + skills) FIRST, so a released fix reaches this
-# box before the rest of the update runs. hh-upgrade replaces our own file on
-# disk with a new inode; this running copy finishes on its old inode and the new
-# hh-update logic takes effect next run. No-ops quietly when already current.
-if [ -x /usr/local/bin/hh-upgrade ]; then
-  /usr/local/bin/hh-upgrade || echo "self-update reported an issue (continuing)"
-else
-  echo "--- hh-upgrade not installed; skipping code self-update (re-run the installer to enable it)"
-fi
+echo "HomelabHero OS update starting: $(date '+%Y-%m-%d %H:%M:%S %Z')"
 
 echo "--- OS packages"
 apt-get update -y
 apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade
 apt-get -y autoremove --purge
-
-echo "--- Claude Code + claudecodeui"
-# Reinstall at @latest rather than `npm update`: a plain global `npm update`
-# will not move a package across a major version, so it can silently stall on an
-# old major. `install ...@latest` always pulls the current release.
-runuser -l "$AGENT_USER" -c '
-  export NVM_DIR="$HOME/.nvm"
-  [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-  # --allow-scripts: npm v12+ blocks postinstall by default, which would leave
-  # the claude binary uncreated on every weekly reinstall. Allow it explicitly.
-  npm install -g --allow-scripts=@anthropic-ai/claude-code,@cloudcli-ai/cloudcli \
-    @anthropic-ai/claude-code@latest @cloudcli-ai/cloudcli@latest
-' || echo "npm update reported an issue (continuing)"
-
-echo "--- Restarting the command center"
-systemctl restart homelab-cc
 
 echo "--- Health check"
 /usr/local/bin/hh doctor || echo "doctor reported problems (see above)"
@@ -50,5 +27,6 @@ if [ -f /var/run/reboot-required ]; then
   echo "NOTE: a reboot is required to finish these OS updates. Reboot when convenient."
 fi
 
-echo "HomelabHero update done: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+echo "To update HomelabHero itself (CLI, skills, Node): hh upgrade"
+echo "HomelabHero OS update done: $(date '+%Y-%m-%d %H:%M:%S %Z')"
 echo "=================================================="

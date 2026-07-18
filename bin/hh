@@ -48,9 +48,9 @@ HomelabHero
 
   hh add-host                  register a host (operator, needs sudo)
   hh rm-host <alias>           remove a host and its credential
-  hh update                    update the OS + Claude now (operator, needs sudo)
-  hh upgrade                   pull the latest HomelabHero code + skills now
-                               (operator, needs sudo; also runs weekly)
+  hh update                    update the OS packages now (operator, needs sudo)
+  hh upgrade                   update HomelabHero itself - code, skills, Node -
+                               by re-running the installer (operator; also weekly)
   hh login                     log Claude Code in as the agent user
   hh audit [lines]             review the broker audit log (operator, needs sudo)
   hh version                   print the HomelabHero version
@@ -376,13 +376,13 @@ cmd_rm_host() {
 
 cmd_update() {
   [ -x "$UPDATER" ] || die "updater not installed at ${UPDATER}"
-  echo "Running the OS + Claude update now (you will be asked for sudo)..."
+  echo "Updating the OS packages now (you will be asked for sudo)..."
   sudo "$UPDATER"
 }
 
 cmd_upgrade() {
   [ -x "$UPGRADER" ] || die "self-updater not installed at ${UPGRADER} (re-run the installer)"
-  echo "Pulling the latest HomelabHero and refreshing installed files (you will be asked for sudo)..."
+  echo "Updating HomelabHero (re-runs the installer non-interactively; you will be asked for sudo)..."
   sudo "$UPGRADER"
 }
 

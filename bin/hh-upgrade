@@ -1,30 +1,26 @@
 #!/usr/bin/env bash
 #
-# hh-upgrade - pull the latest HomelabHero from git and refresh the installed
-# pieces IN PLACE, without re-running the full installer. It runs as the first
-# step of hh-update (so the weekly cron and `hh update` both self-update), and
-# directly from `hh upgrade`. Runs as root.
+# hh-upgrade - bring HomelabHero itself up to date: pull the latest release and
+# re-run the installer non-interactively, in place. This is the single upgrade
+# path - it produces exactly what a fresh install does (CLI, broker, skills,
+# CLAUDE.md, capabilities, Node/npm at latest LTS, the systemd unit), because it
+# literally re-runs setup/main.sh with HH_NONINTERACTIVE=1 (skipping only the
+# interactive sign-in and add-servers steps). The installer is idempotent and
+# keeps your users, credentials, registered hosts, and ops notes.
 #
-# It only overwrites HomelabHero-OWNED files: the CLI binaries, the shipped
-# skills / CLAUDE.md / capabilities, and the security/log templates. It never
-# touches user-owned content - environment notes under infra/, inventory/,
-# runbooks/, hosts/, the cron schedule, or cloudcli.env. See README "Staying
-# up to date". It also self-heals a missing `claude` binary (the issue #11
-# blocked-postinstall failure) on every run, and points at the installer for
-# changes only it can apply (system provisioning, the systemd unit).
-# Deliberately no `set -e`: a hiccup in one step must not abort the hh-update
-# run that called us.
+# Run by `hh upgrade` and by the weekly cron. Node/npm updates happen HERE (via
+# the installer), not in hh-update, which does OS packages only. Runs as root.
+# No `set -e`: a hiccup must not leave the box half-done without a clear message.
 #
 set -uo pipefail
 
 CFG_DIR="/etc/homelabhero"
 INSTALL_CONF="${CFG_DIR}/install.conf"
-AGENT_USER="hhagent"
 
 log()  { printf '%s\n' "$*"; }
 warn() { printf '[warn] %s\n' "$*" >&2; }
 
-echo "--- HomelabHero self-update (code + skills)"
+echo "--- HomelabHero self-update (code, skills, Node/npm)"
 
 [ "$(id -u)" -eq 0 ] || { warn "hh-upgrade must run as root; skipping."; exit 0; }
 
@@ -32,7 +28,7 @@ conf_get() { awk -F= -v k="$2" '$1==k{sub(/^[^=]*=/,"");gsub(/^[ "]+|[ "]+$/,"")
 
 if [ ! -f "$INSTALL_CONF" ]; then
   warn "no ${INSTALL_CONF} (this install predates self-update)."
-  warn "re-run the installer once to enable automatic code updates."
+  warn "re-run the installer once to enable automatic updates."
   exit 0
 fi
 
@@ -40,8 +36,8 @@ CHECKOUT="$(conf_get "$INSTALL_CONF" CHECKOUT)"
 BRANCH="$(conf_get "$INSTALL_CONF" BRANCH)"; [ -n "$BRANCH" ] || BRANCH="main"
 REPO="$(conf_get "$INSTALL_CONF" REPO)"
 
-[ -n "$CHECKOUT" ] || { warn "install.conf has no CHECKOUT; skipping code self-update."; exit 0; }
-command -v git >/dev/null 2>&1 || { warn "git not installed; skipping code self-update."; exit 0; }
+[ -n "$CHECKOUT" ] || { warn "install.conf has no CHECKOUT; skipping."; exit 0; }
+command -v git >/dev/null 2>&1 || { warn "git not installed; skipping."; exit 0; }
 
 # Make sure the source checkout is present. If it was deleted, re-clone it.
 if [ ! -d "$CHECKOUT/.git" ]; then
@@ -49,7 +45,7 @@ if [ ! -d "$CHECKOUT/.git" ]; then
   log "Checkout ${CHECKOUT} missing; re-cloning ${REPO} (${BRANCH})."
   rm -rf "$CHECKOUT"
   git clone --depth 1 --branch "$BRANCH" "$REPO" "$CHECKOUT" >/dev/null 2>&1 \
-    || { warn "clone failed (offline?); skipping code self-update."; exit 0; }
+    || { warn "clone failed (offline?); skipping."; exit 0; }
 fi
 
 OLD_HEAD="$(git -C "$CHECKOUT" rev-parse HEAD 2>/dev/null || echo none)"
@@ -59,110 +55,24 @@ git -C "$CHECKOUT" reset --hard "origin/${BRANCH}" >/dev/null 2>&1 \
   || { warn "git reset failed; keeping the current version."; exit 0; }
 NEW_HEAD="$(git -C "$CHECKOUT" rev-parse HEAD 2>/dev/null || echo none)"
 
-R="$CHECKOUT"
-AGENT_HOME="$(getent passwd "$AGENT_USER" | cut -d: -f6)"
-OPS_DST="${AGENT_HOME}/homelab-ops"
-
 if [ "$OLD_HEAD" = "$NEW_HEAD" ]; then
-  log "Already current (${NEW_HEAD:0:7}); no file refresh needed."
+  log "Code already current (${NEW_HEAD:0:7}); re-running the installer to keep Node/deps at latest LTS."
 else
-  log "Updating ${OLD_HEAD:0:7} -> ${NEW_HEAD:0:7}; refreshing installed files."
-
-  # --- Binaries (HomelabHero-owned). `install` writes a NEW inode, so replacing
-  #     hh-update / hh-upgrade while THIS run is still executing them is safe: the
-  #     running process keeps reading its old inode and the new code takes effect
-  #     on the next run.
-  for b in hh hh-connect hh-update hh-provision hh-upgrade; do
-    [ -f "$R/bin/$b" ] && install -o root -g root -m 755 "$R/bin/$b" "/usr/local/bin/$b"
-  done
-
-  # --- HomelabHero-owned templates. NOT cron.homelabhero (the user may have
-  #     edited their schedule) and NOT cloudcli.env (user config).
-  [ -f "$R/templates/hh.completion" ] && \
-    install -o root -g root -m 644 "$R/templates/hh.completion" /etc/bash_completion.d/hh
-  [ -f "$R/templates/logrotate.homelabhero" ] && \
-    install -o root -g root -m 644 "$R/templates/logrotate.homelabhero" /etc/logrotate.d/homelabhero
-  # sudoers is security-sensitive: validate before installing so a bad template
-  # can never leave the box with a broken sudoers file.
-  if [ -f "$R/templates/sudoers.homelabhero" ]; then
-    TMP_SUDO="$(mktemp)"; cp "$R/templates/sudoers.homelabhero" "$TMP_SUDO"
-    if visudo -cf "$TMP_SUDO" >/dev/null 2>&1; then
-      install -o root -g root -m 0440 "$TMP_SUDO" /etc/sudoers.d/homelabhero
-    else
-      warn "new sudoers template failed validation; keeping the existing one."
-    fi
-    rm -f "$TMP_SUDO"
-  fi
-
-  # --- Ops brain, split by ownership:
-  #   * HomelabHero-owned, overwritten in place: .claude/ (skills + settings.json),
-  #     capabilities/, CLAUDE.md. No `rsync --delete`, so a user's OWN custom skill
-  #     under .claude/skills/ survives; the tradeoff is a skill we retire upstream
-  #     lingers as harmless cruft.
-  #   * User-owned, add-only: everything else (infra/, inventory/, runbooks/,
-  #     hosts/). --ignore-existing adds any brand-new stubs we ship without ever
-  #     clobbering the environment notes the user has filled in.
-  if [ -n "$AGENT_HOME" ] && [ -d "$OPS_DST" ]; then
-    # --checksum, not the default size+mtime quick-check: a content fix that keeps
-    # the same byte size (a one-char change, a same-length version bump) must still
-    # overwrite. This is the "deliver the fix" path, so compare by content.
-    rsync -a --checksum "$R/ops/.claude/"      "$OPS_DST/.claude/"
-    rsync -a --checksum "$R/ops/capabilities/" "$OPS_DST/capabilities/"
-    install -m 644 "$R/ops/CLAUDE.md" "$OPS_DST/CLAUDE.md"
-    # Add-only pass for user-owned trees: never overwrite, just add new stubs.
-    rsync -a --ignore-existing "$R/ops/" "$OPS_DST/"
-    chown -R "$AGENT_USER:$AGENT_USER" "$OPS_DST"
-    # The agent user must still be able to READ its brain. A ZFS/NFSv4 ACL on
-    # TrueNAS can deny this even when the mode bits look right.
-    if ! sudo -u "$AGENT_USER" test -r "$OPS_DST/CLAUDE.md"; then
-      warn "agent '${AGENT_USER}' cannot read ${OPS_DST}/CLAUDE.md after the refresh."
-      warn "fix: setfacl -R -m u:${AGENT_USER}:rX '${OPS_DST}'"
-    fi
-  else
-    warn "ops brain ${OPS_DST} not found; skipped the ops refresh."
-  fi
-
-  # --- Installer-only changes. A few files are applied only by the full installer,
-  #     never by hh-upgrade: system provisioning (setup/main.sh, install.sh) and the
-  #     systemd unit, which is generated with node paths resolved at install time.
-  #     We pull that code but cannot activate it here, so if a pull touched any of
-  #     them, tell the user plainly instead of leaving a silent gap. Best-effort:
-  #     needs the old commit object, which a shallow fetch may have pruned.
-  if git -C "$R" cat-file -e "$OLD_HEAD" 2>/dev/null; then
-    installer_only="$(git -C "$R" diff --name-only "$OLD_HEAD" "$NEW_HEAD" -- \
-      setup/main.sh install.sh templates/homelab-cc.service.template 2>/dev/null)"
-    if [ -n "$installer_only" ]; then
-      warn "these updated files are applied only by the installer, not by hh-upgrade:"
-      printf '%s\n' "$installer_only" | sed 's/^/         - /' >&2
-      warn "re-run the installer to fully apply them (idempotent; keeps your config):"
-      warn "    curl -fsSL https://raw.githubusercontent.com/serversathome/homelabhero/main/install.sh | bash"
-    fi
-  fi
-
-  log "Refreshed. Review ops-brain changes with: git -C ${OPS_DST} diff"
+  log "Updated ${OLD_HEAD:0:7} -> ${NEW_HEAD:0:7}; re-running the installer to apply it."
 fi
 
-# --- Self-heal the claude binary. Runs EVERY time, even when already current: the
-#     binary can go missing independently of any code change. It is created by
-#     claude-code's postinstall, and an older npm (v12+) blocks install scripts by
-#     default, leaving the package on disk with no launcher - the "installed but
-#     cannot talk to Claude" failure (issue #11). If it is missing, recreate it
-#     with --allow-scripts so `hh upgrade` alone repairs the box. Runs as the agent
-#     user, where nvm and the global npm prefix live.
-if [ -n "$AGENT_HOME" ] && [ -s "${AGENT_HOME}/.nvm/nvm.sh" ]; then
-  agent_run() { sudo -u "$AGENT_USER" -H bash -c "export NVM_DIR=\"${AGENT_HOME}/.nvm\"; . \"\$NVM_DIR/nvm.sh\" >/dev/null 2>&1; $*"; }
-  if ! agent_run 'command -v claude >/dev/null 2>&1'; then
-    warn "the 'claude' binary is missing (a blocked npm postinstall); recreating it."
-    if agent_run 'npm install -g --allow-scripts=@anthropic-ai/claude-code,@cloudcli-ai/cloudcli @anthropic-ai/claude-code @cloudcli-ai/cloudcli' >/dev/null 2>&1 \
-       && agent_run 'command -v claude >/dev/null 2>&1'; then
-      log "Recreated the claude binary; restarting the command center."
-      systemctl restart homelab-cc 2>/dev/null || true
-    else
-      warn "could not recreate the claude binary automatically; re-run the installer to repair."
-    fi
-  fi
-elif [ -n "$AGENT_HOME" ]; then
-  warn "nvm not found for ${AGENT_USER}; cannot verify the claude binary. Re-run the installer if Claude will not start."
+# Re-run the installer non-interactively. It does everything: binaries, templates,
+# the ops-brain refresh (shipped files overwritten, user notes preserved), Node at
+# latest LTS, npm packages with the correct --allow-scripts set, and the systemd
+# unit. HH_NONINTERACTIVE=1 skips only sign-in and add-servers.
+if [ ! -f "$CHECKOUT/setup/main.sh" ]; then
+  warn "installer not found at ${CHECKOUT}/setup/main.sh; cannot upgrade."
+  exit 1
 fi
-
+HH_NONINTERACTIVE=1 bash "$CHECKOUT/setup/main.sh"
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  warn "installer exited ${rc}; the box may be partially updated - check the log above."
+  exit "$rc"
+fi
 log "Self-update complete."
