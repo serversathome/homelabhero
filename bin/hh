@@ -8,7 +8,7 @@
 #
 set -euo pipefail
 
-HH_VERSION="0.1.0"
+HH_VERSION="1.0.0"
 REG_DIR="/etc/homelabhero/hosts.d"
 VAULT_DIR="/etc/homelabhero/vault"
 VAULT_USER="hhvault"
