@@ -172,10 +172,18 @@ What it will and will not touch is deliberate:
   working tree, so `git -C ~hhagent/homelab-ops diff` shows exactly what an upgrade
   changed.
 
-One bootstrapping limit: self-update only heals boxes that installed successfully and
-can reach the weekly job. A bug in the installer's early steps still needs a re-run of
-the one-liner. The systemd service unit is also not regenerated here (its node paths
-are resolved at install time); if that template changes, re-run the installer.
+`hh-upgrade` also **self-heals a missing `claude` binary** on every run. That binary
+is created by claude-code's postinstall, which a newer npm can block by default,
+leaving Claude installed but unable to start (the failure behind issue #11). If it is
+missing, `hh upgrade` reinstalls with the postinstall allowed and restarts the UI - so
+`hh upgrade` alone repairs that box, no installer re-run needed.
+
+One bootstrapping limit remains: self-update only heals boxes that installed
+successfully and can reach the weekly job. A handful of changes can come only from the
+installer - its own early setup steps, system provisioning (users, sudoers), and the
+systemd service unit (its node paths are resolved at install time). When a pull touches
+one of those, `hh-upgrade` says so in its log and points you at the one-liner. Re-run
+it to apply them; it keeps your configuration.
 
 Because an update can occasionally break something, `hh doctor` checks the whole
 chain in one pass: the users, the broker, vault permissions, the service, Claude's
