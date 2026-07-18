@@ -47,11 +47,11 @@ credentials, your registered hosts (your `hh list` is left exactly as-is), and
 your ops notes. It skips Claude sign-in if you are already signed in. Safe to run
 any time, and it is the way to force the very latest immediately.
 
-You rarely need to do this by hand, though: `hh upgrade` runs this exact installer
-for you (non-interactively), and the weekly job runs it automatically (see
-[Staying up to date](#staying-up-to-date-with-homelabhero-itself)). Re-running the
-one-liner is just the manual equivalent - handy to force the very latest right now,
-or to onboard a box that predates self-update.
+You rarely need to do this by hand, though: `hh update` runs this exact installer
+for you (non-interactively) and then patches the OS, and the weekly job runs it
+automatically (see [Staying up to date](#staying-up-to-date-with-homelabhero-itself)).
+Re-running the one-liner is just the manual equivalent - handy to force the very
+latest right now, or to onboard a box that predates self-update.
 
 ## Commands
 
@@ -69,8 +69,7 @@ or to onboard a box that predates self-update.
 
     hh add-host                  register a host (operator)
     hh rm-host <alias>           remove a host and its credential
-    hh update                    update the OS packages now (operator)
-    hh upgrade                   update HomelabHero: code, skills, Node (operator)
+    hh update                    update everything now: HomelabHero + OS (operator)
     hh login                     log Claude Code in as the agent user
     hh audit [lines]             review the broker audit log (operator)
     hh version                   print the HomelabHero version
@@ -144,30 +143,30 @@ admin, since a password can't be handled safely in an LLM session.
 
 ## Auto-updates and health
 
-A weekly cron job (`/etc/cron.d/homelabhero`, Sundays at 04:00) runs two jobs in
-order, logging everything to `/var/log/homelabhero-update.log`:
+One command does everything. A weekly cron job (`/etc/cron.d/homelabhero`, Sundays at
+04:00) runs `hh update`, logging to `/var/log/homelabhero-update.log`. Edit that one
+file to change the schedule, or delete it to turn auto-update off. Run it any time with
+`hh update`.
 
-1. **`hh-upgrade`** - update HomelabHero itself (see below).
-2. **`hh-update`** - update the OS packages (`apt`) and run a health check.
+`hh update` does three things in order:
 
-Edit that one file to change the schedule, or delete it to turn auto-update off. The
-two are separate on purpose: `hh update` is a quick, low-risk OS patch that never
-touches Node or restarts the stack, while `hh upgrade` handles the application side.
+1. **Update HomelabHero itself** (see below).
+2. **Update the OS packages** (`apt`).
+3. **Run a health check** (`hh doctor`).
 
 ### Staying up to date with HomelabHero itself
 
-`hh-upgrade` is the single upgrade path. It `git pull`s the release you installed from
-and **re-runs the installer non-interactively** - so an upgrade produces exactly what a
-fresh install does: the `hh` CLI and broker, the shipped skills / `CLAUDE.md` /
-capability docs, Node and npm at the latest LTS, the Claude Code + claudecodeui packages
-(reinstalled with the correct `--allow-scripts` set so their native modules always
-build), and the systemd unit. Improvements and fixes pushed to the repo reach existing
-boxes on their own; nobody has to re-run the installer by hand. Run it on demand with
-`hh upgrade`.
+For step 1, `hh update` `git pull`s the release you installed from and **re-runs the
+installer non-interactively** - so an update produces exactly what a fresh install does:
+the `hh` CLI and broker, the shipped skills / `CLAUDE.md` / capability docs, Node and
+npm at the latest LTS, the Claude Code + claudecodeui packages (reinstalled with the
+correct `--allow-scripts` set so their native modules always build), and the systemd
+unit. Improvements and fixes pushed to the repo reach existing boxes on their own;
+nobody has to re-run the installer by hand.
 
 Because it re-runs the real installer, there is no "some changes only the installer can
-apply" gap anymore - `hh upgrade` **is** the installer. Node tracks the latest LTS
-automatically each week.
+apply" gap - `hh update` **is** the installer, plus the OS pass. Node tracks the latest
+LTS automatically each week.
 
 What it will and will not touch is deliberate:
 
@@ -179,12 +178,12 @@ What it will and will not touch is deliberate:
 - **Never touched** (yours): your environment notes under `infra/`, `inventory/`,
   `runbooks/`, `hosts/`, your edited cron schedule, and `cloudcli.env`. Your own
   custom skills in `.claude/skills/` are preserved too. Ops-brain changes land in the
-  working tree, so `git -C ~hhagent/homelab-ops diff` shows exactly what an upgrade
+  working tree, so `git -C ~hhagent/homelab-ops diff` shows exactly what an update
   changed.
 
 The installer also always reasserts the `claude` binary with the postinstall allowed,
 so the "installed but cannot start" failure (issue #11, a newer npm blocking install
-scripts) self-heals on every upgrade. One bootstrapping limit remains: self-update only
+scripts) self-heals on every update. One bootstrapping limit remains: self-update only
 reaches boxes that installed successfully and can run the weekly job, and a box that
 predates self-update needs **one** manual re-run of the one-liner to enable it (that
 writes `/etc/homelabhero/install.conf`, after which it maintains itself).
@@ -203,8 +202,8 @@ auto-update runs it for you after each update.
     │   ├── hh                     control CLI (agent- and operator-facing)
     │   ├── hh-connect             privileged broker (runs as hhvault)
     │   ├── hh-provision           key-only host registration (UI-safe add)
-    │   ├── hh-update              OS package updater + health check (hh update)
-    │   └── hh-upgrade             self-updater: git pull + re-run installer headless
+    │   └── hh-update              the one update command: git pull + re-run
+    │                              installer headless, then OS packages + doctor
     ├── templates/                 sudoers, systemd unit, cron job, cloudcli env,
     │                              logrotate rules, bash completion
     └── ops/                       becomes ~hhagent/homelab-ops (git-backed)

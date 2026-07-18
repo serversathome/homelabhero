@@ -15,7 +15,6 @@ VAULT_USER="hhvault"
 AGENT_USER="hhagent"
 BROKER="/usr/local/bin/hh-connect"
 UPDATER="/usr/local/bin/hh-update"
-UPGRADER="/usr/local/bin/hh-upgrade"
 UPDATE_LOG="/var/log/homelabhero-update.log"
 BROKER_LOG="/var/log/homelabhero-broker.log"
 NAME_RE='^[A-Za-z0-9._-]+$'
@@ -48,9 +47,9 @@ HomelabHero
 
   hh add-host                  register a host (operator, needs sudo)
   hh rm-host <alias>           remove a host and its credential
-  hh update                    update the OS packages now (operator, needs sudo)
-  hh upgrade                   update HomelabHero itself - code, skills, Node -
-                               by re-running the installer (operator; also weekly)
+  hh update                    update EVERYTHING now - HomelabHero (code, skills,
+                               Node), then the OS packages (operator, needs sudo;
+                               also runs weekly)
   hh login                     log Claude Code in as the agent user
   hh audit [lines]             review the broker audit log (operator, needs sudo)
   hh version                   print the HomelabHero version
@@ -376,14 +375,8 @@ cmd_rm_host() {
 
 cmd_update() {
   [ -x "$UPDATER" ] || die "updater not installed at ${UPDATER}"
-  echo "Updating the OS packages now (you will be asked for sudo)..."
+  echo "Updating HomelabHero and the OS now (you will be asked for sudo)..."
   sudo "$UPDATER"
-}
-
-cmd_upgrade() {
-  [ -x "$UPGRADER" ] || die "self-updater not installed at ${UPGRADER} (re-run the installer)"
-  echo "Updating HomelabHero (re-runs the installer non-interactively; you will be asked for sudo)..."
-  sudo "$UPGRADER"
 }
 
 cmd_audit() {
@@ -427,7 +420,6 @@ main() {
     add-host)  cmd_add_host "$@" ;;
     rm-host)   cmd_rm_host "$@" ;;
     update)    cmd_update "$@" ;;
-    upgrade)   cmd_upgrade "$@" ;;
     login)     cmd_login "$@" ;;
     audit)     cmd_audit "$@" ;;
     version|--version|-V) echo "hh (HomelabHero) ${HH_VERSION}" ;;

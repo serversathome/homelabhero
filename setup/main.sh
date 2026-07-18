@@ -14,10 +14,10 @@ CFG_DIR="/etc/homelabhero"
 VAULT_DIR="${CFG_DIR}/vault"
 REG_DIR="${CFG_DIR}/hosts.d"
 NODE_LTS_MIN=22
-# Non-interactive mode. `hh-upgrade` re-runs this installer headless (weekly via
-# cron and on `hh upgrade`) with HH_NONINTERACTIVE=1, which skips only the two
+# Non-interactive mode. `hh update` re-runs this installer headless (weekly via
+# cron and on demand) with HH_NONINTERACTIVE=1, which skips only the two
 # interactive steps - Claude sign-in (9) and adding servers (10). Everything else
-# is idempotent, so an upgrade produces exactly what a fresh install does.
+# is idempotent, so an update produces exactly what a fresh install does.
 HH_NONINTERACTIVE="${HH_NONINTERACTIVE:-0}"
 
 say()  { printf '\n\033[1;36m==>\033[0m %s\n' "$*"; }
@@ -121,10 +121,12 @@ $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-connect" /usr/local/bi
 $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh"         /usr/local/bin/hh
 $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-update"  /usr/local/bin/hh-update
 $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-provision" /usr/local/bin/hh-provision
-$SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-upgrade" /usr/local/bin/hh-upgrade
-# Record where this git checkout lives (non-secret) so hh-upgrade can pull future
-# releases and refresh the installed files in place, weekly via hh-update. Branch
-# and remote come from the checkout itself so custom forks/branches keep working.
+# hh-upgrade was merged into hh-update (one `hh update` command does everything);
+# remove the retired binary from boxes that had it.
+$SUDO rm -f /usr/local/bin/hh-upgrade
+# Record where this git checkout lives (non-secret) so hh-update can pull future
+# releases and re-run this installer, weekly. Branch and remote come from the
+# checkout itself so custom forks/branches keep working.
 HH_BRANCH_NOW="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)"
 [ "$HH_BRANCH_NOW" = "HEAD" ] && HH_BRANCH_NOW="main"
 HH_REPO_NOW="$(git -C "$REPO_ROOT" remote get-url origin 2>/dev/null || echo https://github.com/serversathome/homelabhero.git)"
@@ -133,8 +135,11 @@ printf 'CHECKOUT=%s\nBRANCH=%s\nREPO=%s\n' "$REPO_ROOT" "$HH_BRANCH_NOW" "$HH_RE
 $SUDO chown root:root "${CFG_DIR}/install.conf"; $SUDO chmod 644 "${CFG_DIR}/install.conf"
 # Bash completion for the hh CLI (subcommands + host aliases).
 $SUDO install -o root -g root -m 644 "${REPO_ROOT}/templates/hh.completion" /etc/bash_completion.d/hh
-# Weekly OS + Claude auto-update (edit or delete /etc/cron.d/homelabhero to change)
-$SUDO install -o root -g root -m 644 "${REPO_ROOT}/templates/cron.homelabhero" /etc/cron.d/homelabhero
+# Weekly auto-update (edit or delete /etc/cron.d/homelabhero to change). Install
+# only if absent: since `hh update` re-runs this installer, overwriting here every
+# week would silently revert a user's edited schedule.
+[ -f /etc/cron.d/homelabhero ] || \
+  $SUDO install -o root -g root -m 644 "${REPO_ROOT}/templates/cron.homelabhero" /etc/cron.d/homelabhero
 # Keep the logs from growing without bound.
 $SUDO install -o root -g root -m 644 "${REPO_ROOT}/templates/logrotate.homelabhero" /etc/logrotate.d/homelabhero
 [ -f /var/log/homelabhero-update.log ] || $SUDO install -o root -g root -m 644 /dev/null /var/log/homelabhero-update.log
@@ -157,7 +162,7 @@ rm -f "$TMP_SUDO"
 say "6/10  Ops brain -> ${AGENT_HOME}/homelab-ops"
 OPS_DST="${AGENT_HOME}/homelab-ops"
 sudo -u "$AGENT_USER" mkdir -p "$OPS_DST"
-# Ownership split so a re-run (this is how `hh upgrade` works) DELIVERS shipped
+# Ownership split so a re-run (this is how `hh update` self-updates) DELIVERS shipped
 # updates without clobbering the user's own notes:
 #   * HomelabHero-owned, overwritten by content (--checksum catches a same-size
 #     edit): the skills, settings.json, capability docs, and CLAUDE.md. No
