@@ -12,6 +12,16 @@ AGENT_USER="hhagent"
 echo "=================================================="
 echo "HomelabHero update starting: $(date '+%Y-%m-%d %H:%M:%S %Z')"
 
+# Refresh HomelabHero itself (CLI + skills) FIRST, so a released fix reaches this
+# box before the rest of the update runs. hh-upgrade replaces our own file on
+# disk with a new inode; this running copy finishes on its old inode and the new
+# hh-update logic takes effect next run. No-ops quietly when already current.
+if [ -x /usr/local/bin/hh-upgrade ]; then
+  /usr/local/bin/hh-upgrade || echo "self-update reported an issue (continuing)"
+else
+  echo "--- hh-upgrade not installed; skipping code self-update (re-run the installer to enable it)"
+fi
+
 echo "--- OS packages"
 apt-get update -y
 apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade
