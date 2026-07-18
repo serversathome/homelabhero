@@ -36,22 +36,28 @@ UI's built-in terminal, but the normal experience is the browser.
 
 ### Updating to the latest code
 
-Re-run the exact same command to update an existing box to the latest HomelabHero:
+You do not have to do anything. Updates arrive on their own: the weekly job runs
+`hh update`, and you can run it yourself any time to force the latest right now:
+
+    hh update
+
+That is the one command. It pulls the latest HomelabHero, re-runs the installer
+non-interactively to refresh everything (CLI and broker, skills, `CLAUDE.md`,
+capability docs, Node/npm at the latest LTS, the Claude Code + claudecodeui
+packages, the service), then patches the OS and runs a health check. It is a
+**reinstall, not a reconfigure** and fully idempotent: it keeps your users, your
+credentials, your registered hosts (your `hh list` is left exactly as-is), and
+your ops notes, and skips Claude sign-in if you are already signed in. See
+[Staying up to date](#staying-up-to-date-with-homelabhero-itself) for exactly
+what it does and does not touch.
+
+If you are onboarding a box that predates self-update (no
+`/etc/homelabhero/install.conf`), run the install one-liner once to enable it,
+after which `hh update` maintains it:
 
     apt update && apt install -y curl && \
       curl -fsSL https://raw.githubusercontent.com/serversathome/homelabhero/main/install.sh | bash
 
-This is a **reinstall, not a reconfigure.** It is idempotent: it pulls the latest
-code and refreshes the installed pieces, but it keeps your users, your
-credentials, your registered hosts (your `hh list` is left exactly as-is), and
-your ops notes. It skips Claude sign-in if you are already signed in. Safe to run
-any time, and it is the way to force the very latest immediately.
-
-You rarely need to do this by hand, though: `hh update` runs this exact installer
-for you (non-interactively) and then patches the OS, and the weekly job runs it
-automatically (see [Staying up to date](#staying-up-to-date-with-homelabhero-itself)).
-Re-running the one-liner is just the manual equivalent - handy to force the very
-latest right now, or to onboard a box that predates self-update.
 
 ## Commands
 
@@ -180,13 +186,6 @@ What it will and will not touch is deliberate:
   custom skills in `.claude/skills/` are preserved too. Ops-brain changes land in the
   working tree, so `git -C ~hhagent/homelab-ops diff` shows exactly what an update
   changed.
-
-The installer also always reasserts the `claude` binary with the postinstall allowed,
-so the "installed but cannot start" failure (issue #11, a newer npm blocking install
-scripts) self-heals on every update. One bootstrapping limit remains: self-update only
-reaches boxes that installed successfully and can run the weekly job, and a box that
-predates self-update needs **one** manual re-run of the one-liner to enable it (that
-writes `/etc/homelabhero/install.conf`, after which it maintains itself).
 
 Because an update can occasionally break something, `hh doctor` checks the whole
 chain in one pass: the users, the broker, vault permissions, the service, Claude's
