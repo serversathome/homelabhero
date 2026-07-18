@@ -14,7 +14,7 @@ troubleshooting skills, and wires up a credential broker so Claude can operate
 your TrueNAS, Proxmox, and Linux machines over SSH without ever seeing a single
 credential.
 
-## Install (one time)
+## Install and update
 
 On a fresh Ubuntu 26.04 LXC, run one command. (The installer is Ubuntu/Debian
 only: it uses `apt`, `systemd`, and `visudo`. It has not been tested on other
@@ -33,6 +33,26 @@ You do not need to remember any commands.
 
 The `hh` commands below still exist for power users and are available in the web
 UI's built-in terminal, but the normal experience is the browser.
+
+### Updating to the latest code
+
+Re-run the exact same command to update an existing box to the latest HomelabHero:
+
+    apt update && apt install -y curl && \
+      curl -fsSL https://raw.githubusercontent.com/serversathome/homelabhero/main/install.sh | bash
+
+This is a **reinstall, not a reconfigure.** It is idempotent: it pulls the latest
+code and refreshes the installed pieces, but it keeps your users, your
+credentials, your registered hosts (your `hh list` is left exactly as-is), and
+your ops notes. It skips Claude sign-in if you are already signed in. Safe to run
+any time, and it is the way to force the very latest immediately.
+
+Most updates also arrive on their own: the weekly job self-updates the `hh` CLI
+and the shipped skills in place (see [Staying up to date](#staying-up-to-date-with-homelabhero-itself)).
+But some changes can only come from the installer - anything in its early setup
+steps, the systemd service unit, or bootstrapping self-update itself on an older
+box - so when in doubt, re-run the one-liner above. It will not disturb your
+configuration.
 
 ## Commands
 
