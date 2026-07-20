@@ -10,16 +10,7 @@
 > [!WARNING]
 > **Installed or last updated HomelabHero before July 18, 2026? Re-run the installer once.**
 >
-> A newer version of npm began blocking package install scripts, which broke the native modules HomelabHero depends on (`better-sqlite3`, `node-pty`, `bcrypt`). On affected boxes, Claude Code installed but would not start, or the web UI and terminal failed to load. Symptoms included:
->
-> ```
-> npm warn allow-scripts ... did not run install scripts
-> ```
->
-> ...or Claude simply not responding after an update.
->
-> **The fix** went live July 18, 2026. Re-run the same install command from the video:
->
+> A newer version of npm began blocking package install scripts, which broke the native modules HomelabHero depends on (`better-sqlite3`, `node-pty`, `bcrypt`). On affected boxes, Claude Code installed but would not start, or the web UI and terminal failed to load. 
 > ```bash
 > apt update && apt install -y curl && \
 > curl -fsSL https://raw.githubusercontent.com/serversathome/homelabhero/main/install.sh | bash
@@ -28,8 +19,7 @@
 > This is a reinstall, not a reconfigure. It is safe and idempotent: your users, credentials, and registered servers are preserved, and your `hh list` stays exactly as-is. Nothing gets wiped.
 >
 > At **Step 10 (adding servers)**, skip it. Your servers are already registered and skipping breaks nothing. Same for the Claude sign-in step if you are already signed in.
->
-> After this one re-run, the box updates itself: a weekly job (and `hh update`) keeps HomelabHero, Node, and your OS current automatically.
+
 
 # HomelabHero
 
