@@ -231,6 +231,30 @@ export NVM_DIR="$HOME/.nvm"
 . "$NVM_DIR/nvm.sh"
 nvm install --lts
 nvm alias default 'lts/*'
+# Anthropic's native installer puts a self-contained, self-updating claude in
+# ~/.local/bin, which a non-login shell does NOT have on PATH. Add it here so
+# the checks below can see one; the generated systemd unit does the same for
+# the service.
+export PATH="$HOME/.local/bin:$PATH"
+
+# Is a NATIVE claude already installed and working? Two decisions hang on this:
+# whether to install the npm package at all, and whether a broken npm package is
+# fatal or merely something to route around.
+native_claude() { [ -x "$HOME/.local/bin/claude" ] && "$HOME/.local/bin/claude" --version >/dev/null 2>&1; }
+
+# A native install WINS, and keeps winning. `hh update` re-runs this installer
+# every week, so anything unconditional here is re-applied every week: leaving
+# the npm package in the list would recreate its bin link and clobber a working
+# native claude on every cron run - the same weekly-clobber dynamic the
+# --allow-scripts fix had to solve one layer up. A native claude also updates
+# itself, so npm has no reason to touch it at all.
+pkgs="@cloudcli-ai/cloudcli"
+if native_claude; then
+  echo "[info] native claude present at $HOME/.local/bin/claude ($("$HOME/.local/bin/claude" --version 2>/dev/null | head -1)); leaving it alone and skipping the npm claude-code package."
+else
+  pkgs="@anthropic-ai/claude-code ${pkgs}"
+fi
+
 # npm v12 BLOCKS dependency install scripts by default (v11 only warns). Those
 # scripts build native modules, so they must be explicitly allowed or the package
 # lands on disk broken. Allow the two first-party packages AND cloudcli's native
@@ -238,8 +262,8 @@ nvm alias default 'lts/*'
 # which are NOT covered transitively by allowing the top-level package. Older npm
 # ignores the flag and runs scripts anyway, so this is safe everywhere.
 allow="@anthropic-ai/claude-code,@cloudcli-ai/cloudcli,better-sqlite3,node-pty,bcrypt"
-if ! out="$(npm install -g --allow-scripts="$allow" \
-  @anthropic-ai/claude-code @cloudcli-ai/cloudcli 2>&1)"; then
+# shellcheck disable=SC2086  # $pkgs is a deliberate list of package arguments.
+if ! out="$(npm install -g --allow-scripts="$allow" $pkgs 2>&1)"; then
   printf '%s\n' "$out"; echo "[error] npm global install failed"; exit 1
 fi
 printf '%s\n' "$out"
@@ -253,12 +277,39 @@ if [ -n "$missed" ]; then
   echo "[warn] harmless on npm 11 (scripts still run) but they are BLOCKED on npm 12."
   echo "[warn] add them to the allow-scripts list in setup/main.sh and re-run."
 fi
+
+# Do not trust "npm said ok". The npm package ships the actual binary as a
+# PLATFORM-SPECIFIC OPTIONAL dependency (@anthropic-ai/claude-code-linux-x64),
+# and on some machines npm never resolves it: the install reports success,
+# installs one package instead of two, and leaves behind a claude that cannot
+# start. The only way to know is to run it.
+#
+# When it does not run, install Anthropic's native build instead. It is
+# self-contained, has no optional platform dependency to miss, and lands in
+# ~/.local/bin - which is first on the service's PATH and is what the branch at
+# the top of this block will find (and preserve) on every future update.
+if ! native_claude; then
+  hash -r 2>/dev/null || true
+  if ! claude --version >/dev/null 2>&1; then
+    echo "[warn] the npm-installed claude does not run - npm could not resolve its platform package."
+    echo "[warn] falling back to Anthropic's native installer -> $HOME/.local/bin/claude"
+    curl -fsSL https://claude.ai/install.sh | bash || { echo "[error] the native claude installer failed"; exit 1; }
+    hash -r 2>/dev/null || true
+    native_claude || { echo "[error] claude still does not run after the native install"; exit 1; }
+    # Retire the broken npm copy. The native one already wins on PATH, but two
+    # claudes on one box is one more than anybody should have to reason about.
+    npm uninstall -g @anthropic-ai/claude-code >/dev/null 2>&1 || true
+    echo "[info] native claude installed: $("$HOME/.local/bin/claude" --version 2>/dev/null | head -1)"
+  fi
+fi
 AGENT
 
-# Resolve node/cloudcli in a shell that actually has nvm loaded. A login shell
-# alone does NOT load nvm on Ubuntu (.bashrc returns early when non-interactive),
-# so we source nvm explicitly. The || true lets the checks below report clearly.
-nvm_run() { sudo -u "$AGENT_USER" -H bash -c "export NVM_DIR=\"${AGENT_HOME}/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\" >/dev/null 2>&1; $*"; }
+# Resolve node/cloudcli/claude in a shell that actually has nvm loaded. A login
+# shell alone does NOT load nvm on Ubuntu (.bashrc returns early when
+# non-interactive), so we source nvm explicitly, and prepend ~/.local/bin so a
+# natively installed claude resolves here exactly as it does in the service.
+# The || true lets the checks below report clearly.
+nvm_run() { sudo -u "$AGENT_USER" -H bash -c "export NVM_DIR=\"${AGENT_HOME}/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\" >/dev/null 2>&1; export PATH=\"${AGENT_HOME}/.local/bin:\$PATH\"; $*"; }
 NODE_BIN="$(nvm_run 'dirname "$(command -v node)"' 2>/dev/null)" || true
 CLOUDCLI="$(nvm_run 'command -v cloudcli' 2>/dev/null)" || true
 CLAUDE_BIN="$(nvm_run 'command -v claude' 2>/dev/null)" || true
@@ -266,10 +317,12 @@ NODE_MAJOR="$(nvm_run 'node -p "process.versions.node.split(\".\")[0]"' 2>/dev/n
 NODE_VER="$(nvm_run 'node -v' 2>/dev/null)" || true
 [ -n "$NODE_BIN" ] || die "node not found after install (nvm did not load)."
 [ -n "$CLOUDCLI" ] || die "cloudcli not found after install."
-# The claude binary is created by claude-code's postinstall. If it is missing,
-# npm blocked that script (see the --allow-scripts flag above) - fail loudly with
-# the fix rather than shipping a UI that cannot find claude.
-[ -n "$CLAUDE_BIN" ] || die "claude binary not found after install (npm likely blocked its postinstall). Re-run as ${AGENT_USER}: npm install -g --allow-scripts=@anthropic-ai/claude-code,@cloudcli-ai/cloudcli,better-sqlite3,node-pty,bcrypt @anthropic-ai/claude-code @cloudcli-ai/cloudcli"
+# claude comes from one of two places by now: the npm package's postinstall, or
+# Anthropic's native installer (the fallback above). Missing here means both
+# failed, so point at the native installer, which is the one that does not depend
+# on npm resolving an optional platform package.
+[ -n "$CLAUDE_BIN" ] || die "claude not found after install. Install it by hand as ${AGENT_USER}, then re-run this installer (it will keep that install):
+    sudo -u ${AGENT_USER} -i bash -c 'curl -fsSL https://claude.ai/install.sh | bash'"
 [ "${NODE_MAJOR:-0}" -ge "$NODE_LTS_MIN" ] || die "Node ${NODE_MAJOR:-?} < ${NODE_LTS_MIN}."
 say "    node ${NODE_VER}  cloudcli ${CLOUDCLI}  claude ${CLAUDE_BIN}"
 

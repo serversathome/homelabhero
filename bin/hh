@@ -482,8 +482,13 @@ cmd_doctor() {
   if systemctl is-active --quiet homelab-cc; then ok "service homelab-cc active"; else bad "service homelab-cc not active"; fi
   local ahome cv
   ahome="$(getent passwd "$AGENT_USER" | cut -d: -f6)"
-  cv="$(sudo -n -u "$AGENT_USER" -H bash -c "export NVM_DIR=\"${ahome}/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\" >/dev/null 2>&1; command -v claude >/dev/null && claude --version" 2>/dev/null | tail -1 || true)"
-  [ -n "$cv" ] && ok "claude: ${cv}" || note "could not read claude version here (fine if not run with sudo)"
+  # Resolve claude the way the service does: ~/.local/bin (Anthropic's native
+  # installer) FIRST, then the nvm prefix (the npm package). Report the path
+  # next to the version - "which claude is this box actually running" is the
+  # first question to answer when the two disagree.
+  cv="$(sudo -n -u "$AGENT_USER" -H bash -c "export NVM_DIR=\"${ahome}/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\" >/dev/null 2>&1; export PATH=\"${ahome}/.local/bin:\$PATH\"; command -v claude >/dev/null && printf '%s\t%s' \"\$(claude --version 2>/dev/null | head -1)\" \"\$(command -v claude)\"" 2>/dev/null | tail -1 || true)"
+  if [ -n "$cv" ]; then ok "claude: $(printf '%s' "$cv" | awk -F'\t' '{print $1" at "$2}')"
+  else note "could not read claude version here (fine if not run with sudo)"; fi
 
   echo "Hosts"
   shopt -s nullglob
@@ -720,9 +725,11 @@ cmd_login() {
   echo "Starting Claude Code as ${AGENT_USER}. Run /login inside, then type /exit." >/dev/tty
   # Force HOME to the agent's home (do not rely on sudo -i) and load nvm so the
   # claude binary is on PATH. Otherwise claude reads root's ~/.claude and fails.
+  # ~/.local/bin goes first for the same reason the service unit puts it there:
+  # a natively installed claude lives in it, and that is the one that must run.
   # Launch from the ops brain so project settings resolve there (not the caller's
   # cwd) and the homelab-ops project is registered for the web UI, skills and all.
-  sudo -u "$AGENT_USER" -H bash -c "export HOME='${ahome}'; export NVM_DIR=\"\$HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\"; cd \"\$HOME/homelab-ops\" 2>/dev/null || cd \"\$HOME\"; exec claude"
+  sudo -u "$AGENT_USER" -H bash -c "export HOME='${ahome}'; export NVM_DIR=\"\$HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\"; export PATH=\"\$HOME/.local/bin:\$PATH\"; cd \"\$HOME/homelab-ops\" 2>/dev/null || cd \"\$HOME\"; exec claude"
 }
 
 main() {
