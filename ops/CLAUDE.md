@@ -23,28 +23,43 @@ through a broker that holds the credentials for you:
     hh diff                       # inventory drift vs the last saved snapshot
     hh scan [cidr]                # discover live endpoints on the network (read-only)
     hh unifi <op> [alias]         # read the UniFi router/console (READ-ONLY)
+    hh firewalla <op> [alias]     # read the Firewalla via MSP (READ-ONLY)
 
 hh run works the same for every host: TrueNAS, Proxmox, and any Linux box are all
 reached as a normal shell over SSH.
 
 ## The router is different, and it is read-only
 
-If a UniFi console is registered (it shows in `hh list` with platform `unifi`),
-it is reached over its local API rather than SSH, so `hh run` does not work on
-it. Use `hh unifi <op>`, starting with `hh unifi summary`. `hh overview` and
-`hh inventory` already include it.
+A router is reached over an HTTP API rather than SSH, so `hh run` does not work
+on it. Two kinds are supported, and `hh list` shows which is registered:
+
+- platform `unifi` - a UniFi console on the LAN. Use `hh unifi <op>`, starting
+  with `hh unifi summary`.
+- platform `firewalla` - a Firewalla, read through Firewalla MSP. Use
+  `hh firewalla <op>`, starting with `hh firewalla summary`.
+
+`hh overview` and `hh inventory` already include either one.
 
 That access is READ-ONLY and cannot be talked into being anything else. There is
-no command that restarts a device, edits a VLAN, SSID, firewall rule, or port
-forward, or writes any UniFi setting: the broker only issues GET requests, and
-the API key is a View Only key that the console itself will not accept writes
-from. Do not look for a way around it, and do not tell the user you have changed
-something on the router, because you cannot have.
+no command that restarts a device, edits a VLAN, SSID, firewall rule, port
+forward, or Firewalla rule, or writes any router setting at all: the brokers
+only issue GET requests. On UniFi there is a second lock - the API key is a View
+Only key the console itself will not accept writes from - and on Firewalla there
+is not, because MSP has no read-only token, which makes the GET-only broker the
+only thing keeping that token safe. Do not look for a way around either one, and
+do not tell the user you have changed something on the router, because you
+cannot have.
 
-When a UniFi change is genuinely needed, that is still a useful conversation:
+When a router change is genuinely needed, that is still a useful conversation:
 say plainly that HomelabHero reads the router but does not change it, then give
-the exact steps to make the change in the UniFi app, and offer to read the state
-back afterwards to confirm it worked. The unifi-ops skill covers this.
+the exact steps to make the change in the UniFi app, the Firewalla app, or MSP,
+and offer to read the state back afterwards to confirm it worked. The unifi-ops
+and firewalla-ops skills cover this.
+
+One caveat specific to Firewalla: it is read through Firewalla's cloud, so when
+the internet is down `hh firewalla` is down with it. A failure there is not
+evidence that the router is broken - say which of the two you have actually
+established.
 
 Hosts are reached as root by default, so commands run directly - no sudo needed.
 `hh list` shows the connect user per host. Some hosts (notably TrueNAS) may
@@ -101,6 +116,7 @@ Read the relevant one so you use the whole toolset, not just the basics:
 @capabilities/truenas.md
 @capabilities/linux.md
 @capabilities/unifi.md
+@capabilities/firewalla.md
 
 These describe what each system can do and the exact commands to inspect or
 manage every subsystem, all runnable through hh run.
@@ -135,7 +151,8 @@ When the failing layer is not obvious, work outward:
 3. Storage underneath it (ZFS pool, dataset, disk) -> truenas-ops
 4. The network between them (mesh, switch, gateway, DNS, tunnels) -> network-diag
 5. The fabric itself, seen from the router (WAN, APs, switches, clients,
-   VLANs) -> unifi-ops
+   VLANs, devices, traffic, rules) -> unifi-ops or firewalla-ops, whichever
+   router is registered
 
 Cross-cutting skills that sit outside the ladder: backup-restore (snapshot,
 restore, roll back, verify recoverability), patch-management (update hosts and

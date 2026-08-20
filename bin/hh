@@ -3,19 +3,20 @@
 # hh - HomelabHero control CLI.
 #
 # Agent-safe (read-only, used by Claude): list, run, test, overview, inventory,
-#   scan, doctor, unifi (read ops).
-# Operator (need sudo, run from an admin shell): add-host, add-unifi, rm-host,
-#   repin, update, login.
+#   scan, doctor, unifi and firewalla (read ops).
+# Operator (need sudo, run from an admin shell): add-host, add-unifi,
+#   add-firewalla, rm-host, repin, update, login.
 #
 set -euo pipefail
 
-HH_VERSION="1.2.1"
+HH_VERSION="1.3.0"
 REG_DIR="/etc/homelabhero/hosts.d"
 VAULT_DIR="/etc/homelabhero/vault"
 VAULT_USER="hhvault"
 AGENT_USER="hhagent"
 BROKER="/usr/local/bin/hh-connect"
 UNIFI_BROKER="/usr/local/bin/hh-unifi"
+FW_BROKER="/usr/local/bin/hh-firewalla"
 UPDATER="/usr/local/bin/hh-update"
 UPDATE_LOG="/var/log/homelabhero-update.log"
 BROKER_LOG="/var/log/homelabhero-broker.log"
@@ -44,6 +45,12 @@ HomelabHero
                                  ops: summary ping info sites devices device
                                       stats clients networks health get
                                  alias may be omitted with one console
+  hh firewalla <op> [alias]    read your Firewalla through the MSP API.
+                                 READ-ONLY: it can never change your network.
+                                 ops: summary ping info boxes devices device
+                                      alarms flows bandwidth rules lists
+                                      trends stats get
+                                 alias may be omitted with one Firewalla
   hh doctor                    check the whole setup is healthy
   hh diff [alias]              inventory drift vs the last saved snapshot
   hh provision <alias> <host> [port] [platform] [user]
@@ -55,6 +62,8 @@ HomelabHero
   hh add-host                  register a host (operator, needs sudo)
   hh add-unifi                 register a UniFi router/console with a View Only
                                API key (operator, needs sudo)
+  hh add-firewalla             register a Firewalla with an MSP personal access
+                               token (operator, needs sudo)
   hh repin <alias>             re-pin a UniFi console's TLS key after you
                                changed its certificate (operator, needs sudo)
   hh rm-host <alias>           remove a host and its credential
@@ -117,6 +126,51 @@ _unifi_default() {
     1) printf '%s' "$list" ;;
     *) die "more than one UniFi console registered; name which one: $(printf '%s' "$list" | tr '\n' ' ')" ;;
   esac
+}
+
+# ---- Firewalla (MSP token hosts) -------------------------------------------
+#
+# A Firewalla is read through Firewalla's MSP cloud API rather than over SSH or
+# over the LAN, because Firewalla ships no supported local API. Registration is
+# therefore an MSP domain and a personal access token, and everything that would
+# shell into a host has to route around it, exactly as for UniFi.
+
+_is_firewalla() { [ -f "${REG_DIR}/$1.conf" ] && [ "$(conf_get "${REG_DIR}/$1.conf" PLATFORM)" = "firewalla" ]; }
+firewalla_broker() { sudo -n -H -u "$VAULT_USER" "$FW_BROKER" "$@"; }
+
+_firewalla_aliases() { shopt -s nullglob; for f in "$REG_DIR"/*.conf; do
+  local a; a="$(basename "$f" .conf)"; _is_firewalla "$a" && printf '%s\n' "$a"; done; }
+
+_firewalla_default() {
+  local list; list="$(_firewalla_aliases)"
+  case "$(printf '%s' "$list" | grep -c .)" in
+    0) die "no Firewalla registered yet. Register one from an admin shell: hh add-firewalla" ;;
+    1) printf '%s' "$list" ;;
+    *) die "more than one Firewalla registered; name which one: $(printf '%s' "$list" | tr '\n' ' ')" ;;
+  esac
+}
+
+# ---- routers in general -----------------------------------------------------
+#
+# UniFi and Firewalla are both "a router read over an HTTP API": there is no
+# shell on the far end, so `hh run`, the vitals sweep, and the inventory probes
+# all have to skip them and ask their broker for a summary instead. These three
+# helpers are how the rest of the CLI does that without caring which brand it is
+# looking at.
+
+_is_api_host() { _is_unifi "$1" || _is_firewalla "$1"; }
+_api_broker_path() { if _is_unifi "$1"; then printf '%s' "$UNIFI_BROKER"; else printf '%s' "$FW_BROKER"; fi; }
+# api_broker <alias> <op> - run one read op against whichever broker owns it.
+api_broker() { local a="$1"; shift; sudo -n -H -u "$VAULT_USER" "$(_api_broker_path "$a")" "$@" "$a"; }
+
+cmd_firewalla() {
+  local op="${1:-}"; shift || true
+  [ -n "$op" ] || die "usage: hh firewalla <op> [alias] [args]  (ops: summary ping info boxes devices device alarms flows bandwidth rules lists trends stats get)"
+  # Same shape as hh unifi: the op comes first, then an OPTIONAL alias, taken
+  # only when the next argument actually names a registered Firewalla.
+  local alias=""
+  if [ -n "${1:-}" ] && _is_firewalla "${1}"; then alias="$1"; shift; else alias="$(_firewalla_default)"; fi
+  exec sudo -n -H -u "$VAULT_USER" "$FW_BROKER" "$op" "$alias" "$@"
 }
 
 cmd_unifi() {
@@ -183,9 +237,9 @@ cmd_run() {
 
 cmd_test() {
   [ "$#" -eq 1 ] || die "usage: hh test <alias>"
-  if _is_unifi "$1"; then
+  if _is_api_host "$1"; then
     local out
-    if out="$(unifi_broker ping "$1" 2>&1)"; then echo "OK: $1 reachable ($out)"
+    if out="$(api_broker "$1" ping 2>&1)"; then echo "OK: $1 reachable ($out)"
     else echo "FAIL: $1 not reachable"; printf '%s\n' "$out" | sed 's/^/  /'; return 1; fi
     return 0
   fi
@@ -206,13 +260,14 @@ cmd_overview() {
   for f in "${files[@]}"; do
     local a plat; a="$(basename "$f" .conf)"; plat="$(conf_get "$f" PLATFORM)"
     printf -- '---------------------------------------------\n## %s (%s)\n' "$a" "$plat"
-    # A UniFi console has no shell to sweep; its vitals are WAN/LAN/WiFi health,
-    # which is what the summary op reports. Capture first, then decide: piping
-    # straight to sed would print the broker's error text and the UNREACHABLE
-    # line, which reads like two different failures.
-    if _is_unifi "$a"; then
+    # A router has no shell to sweep; its vitals are what its summary op
+    # reports - WAN/LAN/WiFi health on UniFi, box and device state on Firewalla.
+    # Capture first, then decide: piping straight to sed would print the
+    # broker's error text AND the UNREACHABLE line, which reads like two
+    # different failures.
+    if _is_api_host "$a"; then
       local uout
-      if uout="$(unifi_broker summary "$a" 2>/dev/null)"; then printf '%s\n' "$uout" | sed 's/^/  /'
+      if uout="$(api_broker "$a" summary 2>/dev/null)"; then printf '%s\n' "$uout" | sed 's/^/  /'
       else echo "  UNREACHABLE"; fi
       continue
     fi
@@ -226,14 +281,15 @@ cmd_overview() {
 _inventory_one() {
   local a plat; a="$1"; plat="$(_platform_of "$a")"
   printf -- '=============================================\n# %s (%s)\n' "$a" "$plat"
-  # "What is running" on the router means the gear it has adopted (APs,
-  # switches, the gateway itself) plus how many clients are on the network.
-  if _is_unifi "$a"; then
+  # "What is running" on a router means the gear it knows about - adopted APs
+  # and switches on UniFi, the devices on the network for Firewalla - plus the
+  # health summary above it.
+  if _is_api_host "$a"; then
     local uout
-    uout="$(unifi_broker summary "$a" 2>/dev/null)" || { echo "UNREACHABLE"; return; }
+    uout="$(api_broker "$a" summary 2>/dev/null)" || { echo "UNREACHABLE"; return; }
     printf '%s\n' "$uout"
     echo
-    uout="$(unifi_broker devices "$a" 2>/dev/null)" && printf '%s\n' "$uout"
+    uout="$(api_broker "$a" devices 2>/dev/null)" && printf '%s\n' "$uout"
     return
   fi
   if ! broker "$a" 'true' 2>/dev/null; then echo "UNREACHABLE"; return; fi
@@ -447,11 +503,22 @@ EOF
         *" 8006 "*) plat=proxmox ;;
         *" 443 "*)  plat=truenas ;;
       esac
+      # Firewalla is deliberately not on this list. It is read through its MSP
+      # domain, which is not an address on this network, so there is nothing a
+      # scan could register - see the hint printed after the loop.
       plat="$(ask "Platform for ${ip} (linux/truenas/proxmox/unifi)" "$plat")"
       echo; echo "Registering ${ip} as ${plat} ..."
-      if [ "$plat" = "unifi" ]; then cmd_add_host --host "$ip" --port 443 --platform unifi
-      else cmd_add_host --host "$ip" --port 22 --platform "$plat"; fi
+      case "$plat" in
+        unifi)     cmd_add_host --host "$ip" --port 443 --platform unifi ;;
+        firewalla) echo "A Firewalla is not registered by address: HomelabHero reads it through"
+                   echo "Firewalla MSP. Register it with 'hh add-firewalla' instead. Skipping ${ip}." ;;
+        *)         cmd_add_host --host "$ip" --port 22 --platform "$plat" ;;
+      esac
     done
+    echo
+    echo "Router note: a Firewalla does not appear here as something to register."
+    echo "It has no local API to read, so it is added through Firewalla MSP with:"
+    echo "    hh add-firewalla"
   else
     echo; echo "To register: hh scan ${cidr} --add   (or: hh add-host)"
   fi
@@ -469,6 +536,7 @@ cmd_doctor() {
   id "$VAULT_USER" >/dev/null 2>&1 && ok "vault user ${VAULT_USER} exists" || bad "missing user ${VAULT_USER}"
   [ -x "$BROKER" ] && ok "broker installed" || bad "broker missing at ${BROKER}"
   [ -x "$UNIFI_BROKER" ] && ok "unifi broker installed (read-only)" || note "unifi broker missing at ${UNIFI_BROKER} (run: hh update)"
+  [ -x "$FW_BROKER" ] && ok "firewalla broker installed (read-only)" || note "firewalla broker missing at ${FW_BROKER} (run: hh update)"
   if [ -d "$VAULT_DIR" ]; then
     local perm; perm="$(stat -c '%a %U' "$VAULT_DIR" 2>/dev/null || true)"
     [ "$perm" = "700 ${VAULT_USER}" ] && ok "vault perms (${perm})" || note "vault perms are '${perm}', expected '700 ${VAULT_USER}'"
@@ -496,13 +564,20 @@ cmd_doctor() {
   [ "${#files[@]}" -eq 0 ] && note "no hosts registered yet (hh add-host)"
   for f in "${files[@]}"; do
     local a u; a="$(basename "$f" .conf)"; u="$(conf_get "$f" USER)"
-    if _is_unifi "$a"; then
-      if unifi_broker ping "$a" >/dev/null 2>&1; then
-        ok "reach ${a} (unifi API, read-only)"
-        [ -n "$(conf_get "$f" PIN)" ] || note "${a} has no TLS pin; re-pin it with: hh repin ${a}"
+    if _is_api_host "$a"; then
+      local kind; kind="$(conf_get "$f" PLATFORM)"
+      if api_broker "$a" ping >/dev/null 2>&1; then
+        ok "reach ${a} (${kind} API, read-only)"
+        # Only a UniFi console is TLS-pinned, because only it presents a
+        # self-signed certificate. A Firewalla is reached at its MSP domain,
+        # which has a publicly trusted one, so ordinary CA verification already
+        # covers it and there is no pin to miss.
+        if _is_unifi "$a" && [ -z "$(conf_get "$f" PIN)" ]; then
+          note "${a} has no TLS pin; re-pin it with: hh repin ${a}"
+        fi
       else
-        bad "cannot reach ${a} over the UniFi API (key rejected, console down, or cert changed)"
-        printf '           detail: %s\n' "$(unifi_broker ping "$a" 2>&1 | head -1)"
+        bad "cannot reach ${a} over the ${kind} API (credential rejected, device offline, or cert changed)"
+        printf '           detail: %s\n' "$(api_broker "$a" ping 2>&1 | head -1)"
       fi
       continue
     fi
@@ -538,14 +613,22 @@ cmd_add_host() {
   [ "$(id -u)" -eq 0 ] || sudo -v || die "add-host needs sudo (run from an admin shell, not the Claude UI)"
   # Platform is settled before the alias so a UniFi console can suggest a
   # sensible name and then skip every SSH question, which does not apply to it.
-  [ -n "$plat" ] || plat="$(ask 'Platform (linux/truenas/proxmox/unifi)' linux)"
-  case "$plat" in linux|truenas|proxmox|unifi) : ;; *) die "unknown platform: ${plat} (linux, truenas, proxmox, unifi)" ;; esac
+  [ -n "$plat" ] || plat="$(ask 'Platform (linux/truenas/proxmox/unifi/firewalla)' linux)"
+  case "$plat" in linux|truenas|proxmox|unifi|firewalla) : ;; *) die "unknown platform: ${plat} (linux, truenas, proxmox, unifi, firewalla)" ;; esac
   if [ -z "$alias" ]; then
-    if [ "$plat" = "unifi" ]; then alias="$(ask 'Alias (short name for your router)' router)"
-    else alias="$(ask 'Alias (short name, e.g. pve1)')"; fi
+    case "$plat" in
+      unifi|firewalla) alias="$(ask 'Alias (short name for your router)' router)" ;;
+      *)               alias="$(ask 'Alias (short name, e.g. pve1)')" ;;
+    esac
   fi
   [[ "$alias" =~ $NAME_RE ]] || die "invalid alias"
   [ -f "${REG_DIR}/${alias}.conf" ] && die "alias already registered"
+  # A Firewalla is reached at an MSP domain, never at an address on the LAN, so
+  # ask for the thing it will actually use instead of an IP it cannot use.
+  if [ "$plat" = "firewalla" ]; then
+    [ -n "$host" ] || host="$(ask 'Your Firewalla MSP domain (e.g. yourname.firewalla.net)')"
+    _add_firewalla_host "$alias" "$host" "${port:-443}"; return
+  fi
   [ -n "$host" ] || host="$(ask 'IP or hostname')"
   if [ "$plat" = "unifi" ]; then _add_unifi_host "$alias" "$host" "${port:-443}"; return; fi
   [ -n "$port" ] || port="$(ask 'SSH port' 22)"
@@ -664,6 +747,88 @@ EOF
   fi
 }
 
+# Register a Firewalla. Operator-only and shell-only, for the same reason the
+# UniFi path is: the token is a secret being typed, and a secret typed into an
+# LLM session has already been seen by the LLM. There is deliberately no
+# UI/agent path to this.
+_add_firewalla_host() {
+  local alias="$1" host="$2" port="$3" cred="${1}.token" token
+  # People paste a URL out of the browser bar. Take the domain out of it rather
+  # than storing something that will never resolve.
+  host="${host#https://}"; host="${host#http://}"; host="${host%%/*}"
+  # An IP here is the single most likely mistake, because every other host in
+  # HomelabHero is registered by address. Name the misunderstanding instead of
+  # registering something that cannot work.
+  case "$host" in
+    *[!0-9.]*) : ;;
+    *) die "'${host}' is an IP address. Firewalla has no local API for HomelabHero
+    to read, so it is reached through your MSP domain instead - something like
+    yourname.firewalla.net. Register that." ;;
+  esac
+  cat >/dev/tty <<EOF
+
+Registering ${host} as your Firewalla.
+
+Firewalla has no local API on the box, so HomelabHero reads it through
+Firewalla MSP - Firewalla's own management portal - using a personal access
+token:
+
+  1. Sign in to your MSP at https://${host}
+  2. Account Settings -> Create New Token, name it "homelabhero", and copy it.
+
+  READ THIS PART. Unlike UniFi, Firewalla MSP has no read-only token: a token
+  carries the permissions of the account that made it, and there is no view-only
+  role to mint it under. So the one thing keeping this token from changing your
+  network is HomelabHero itself - the broker behind 'hh firewalla' can only ever
+  issue an HTTP GET, and has no code path that could POST, PUT, PATCH or DELETE.
+
+  The token is stored in the vault, readable only by the ${VAULT_USER} user, and
+  is never shown to Claude. If you would rather not hold one at all, that is a
+  reasonable choice: skip this and keep reading your Firewalla in its own app.
+
+EOF
+  token="$(asksecret "Firewalla MSP personal access token for ${host}")"
+  [ -n "$token" ] || die "no token entered"
+  printf '%s' "$token" | sudo -u "$VAULT_USER" tee "${VAULT_DIR}/${cred}" >/dev/null
+  sudo -u "$VAULT_USER" chmod 600 "${VAULT_DIR}/${cred}"
+  unset token
+
+  # No TLS pin here, unlike UniFi. Pinning exists to make a self-signed LAN
+  # certificate trustworthy; an MSP domain is a public host with a publicly
+  # trusted certificate, and ordinary CA verification is the stronger check.
+  sudo tee "${REG_DIR}/${alias}.conf" >/dev/null <<EOF
+# HomelabHero host registry entry (non-secret)
+PLATFORM=firewalla
+HOST=${host}
+PORT=${port}
+USER=api-token
+AUTH=token
+CRED=${cred}
+EOF
+  sudo chmod 644 "${REG_DIR}/${alias}.conf"
+
+  echo >/dev/tty; echo "Registered '${alias}'. Testing..." >/dev/tty
+  if cmd_test "$alias"; then
+    echo >/dev/tty
+    firewalla_broker summary "$alias" 2>&1 | sed 's/^/  /' >/dev/tty || true
+  else
+    cat >/dev/tty <<EOF
+
+The token did not work. Nothing is broken; the registration is saved but
+unusable. Check that you copied the whole token and that the domain is your MSP
+domain (yourname.firewalla.net), not the box's LAN address, then replace it:
+
+    hh rm-host ${alias}
+    hh add-firewalla
+EOF
+  fi
+}
+
+cmd_add_firewalla() {
+  [ "$(id -u)" -eq 0 ] || sudo -v || die "add-firewalla needs sudo (run from an admin shell, not the Claude UI)"
+  cmd_add_host --platform firewalla "$@"
+}
+
 cmd_add_unifi() {
   [ "$(id -u)" -eq 0 ] || sudo -v || die "add-unifi needs sudo (run from an admin shell, not the Claude UI)"
   cmd_add_host --platform unifi "$@"
@@ -677,7 +842,9 @@ cmd_repin() {
   [ "$#" -eq 1 ] || die "usage: hh repin <alias>"
   local alias="$1" f="${REG_DIR}/$1.conf"
   [ -f "$f" ] || die "no such host"
-  _is_unifi "$alias" || die "'${alias}' is not a UniFi console"
+  _is_unifi "$alias" || die "'${alias}' is not a UniFi console. Only a UniFi console is
+    TLS-pinned, because only it presents a self-signed certificate; a Firewalla
+    MSP host has a publicly trusted one and has no pin to refresh."
   [ "$(id -u)" -eq 0 ] || sudo -v || die "repin needs sudo (run from an admin shell, not the Claude UI)"
   local host port pin
   host="$(conf_get "$f" HOST)"; port="$(conf_get "$f" PORT)"
@@ -743,10 +910,12 @@ main() {
     diff)      cmd_diff "$@" ;;
     scan)      cmd_scan "$@" ;;
     unifi)     cmd_unifi "$@" ;;
+    firewalla) cmd_firewalla "$@" ;;
     doctor)    cmd_doctor "$@" ;;
     provision) cmd_provision "$@" ;;
     add-host)  cmd_add_host "$@" ;;
     add-unifi) cmd_add_unifi "$@" ;;
+    add-firewalla) cmd_add_firewalla "$@" ;;
     repin)     cmd_repin "$@" ;;
     rm-host)   cmd_rm_host "$@" ;;
     update)    cmd_update "$@" ;;

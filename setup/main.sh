@@ -153,6 +153,7 @@ $SUDO install -d -o "$VAULT_USER" -g "$VAULT_USER" -m 700 "$VAULT_DIR"
 say "4/10  Broker, CLI, updater, and weekly auto-update"
 $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-connect" /usr/local/bin/hh-connect
 $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-unifi"   /usr/local/bin/hh-unifi
+$SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-firewalla" /usr/local/bin/hh-firewalla
 $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh"         /usr/local/bin/hh
 $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-update"  /usr/local/bin/hh-update
 $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-provision" /usr/local/bin/hh-provision
@@ -390,6 +391,8 @@ else
   echo "Looking for servers on your network you can add..."
   echo "This also looks for your router. If it is a UniFi console, you can add it"
   echo "with a UniFi API key; HomelabHero only ever reads from it, never writes."
+  echo "Have a Firewalla instead? It is added separately, after this, with"
+  echo "'hh add-firewalla' and a Firewalla MSP token. Also read-only."
   hh scan --add </dev/tty || warn "network scan did not complete"
   while [ "$(printf 'Add another server by hand? (y/N): ' >/dev/tty; read -r a </dev/tty || true; echo "${a:-N}")" = "y" ]; do
     hh add-host </dev/tty || warn "add-host did not complete"

@@ -55,11 +55,13 @@ while IFS= read -r line || [ -n "$line" ]; do
   esac
 done < "$CONF"
 
-# A UniFi console is registered like any other host but is reached over its API,
+# A router is registered like any other host but is reached over an HTTP API,
 # not SSH. Catch it here with a pointer rather than letting it fail later as a
 # refused connection or a confusing missing-USER error.
 [ "$AUTH" = "apikey" ] && die "'${ALIAS}' is a UniFi console, reached over its API rather than SSH.
     Use 'hh unifi <op> ${ALIAS}' instead of 'hh run'. It is read-only."
+[ "$AUTH" = "token" ] && die "'${ALIAS}' is a Firewalla, reached over the MSP API rather than SSH.
+    Use 'hh firewalla <op> ${ALIAS}' instead of 'hh run'. It is read-only."
 
 [ -n "$HOST" ] || die "registry entry missing HOST"
 [ -n "$RUSER" ] || die "registry entry missing USER"

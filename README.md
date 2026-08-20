@@ -103,6 +103,8 @@ changed, and anything worth knowing before you update.
     hh scan [cidr]               discover live hosts (and your router) on the network
     hh unifi <op> [alias]        read your UniFi router: summary, health, devices,
                                  clients, networks (READ-ONLY, see below)
+    hh firewalla <op> [alias]    read your Firewalla: summary, devices, alarms,
+                                 flows, bandwidth, rules (READ-ONLY, see below)
     hh doctor                    check the whole setup is healthy
     hh provision <alias> <host> [port] [platform] [user]
                                  register a host with a generated key (UI-safe);
@@ -110,6 +112,7 @@ changed, and anything worth knowing before you update.
 
     hh add-host                  register a host (operator)
     hh add-unifi                 register your UniFi router with an API key (operator)
+    hh add-firewalla             register your Firewalla with an MSP token (operator)
     hh repin <alias>             re-pin a UniFi console after its cert changed (operator)
     hh rm-host <alias>           remove a host and its credential
     hh update                    update everything now: HomelabHero + OS (operator)
@@ -135,13 +138,15 @@ HomelabHero uses privilege separation with a connection broker. Three users:
 
 Claude runs as `hhagent`, which cannot read anything `hhvault` owns. To reach a
 host, Claude runs `hh run`, which invokes the broker `hh-connect` through a single
-narrow sudoers rule (`hhagent` may run only that broker, its read-only UniFi
-sibling `hh-unifi`, and `hh-provision`, and only as `hhvault`).
+narrow sudoers rule (`hhagent` may run only that broker, its read-only router
+siblings `hh-unifi` and `hh-firewalla`, and `hh-provision`, and only as
+`hhvault`).
 The broker looks the host up in the non-secret registry, reads the key or password
 from the vault, and opens the connection. Claude gets the output, never the secret.
-A UniFi API key works the same way: `hh-unifi` reads it from the vault and passes
-it to curl through a config file on stdin, never on the command line, so it never
-appears in `/proc` where the agent user could read it.
+A router credential works the same way: `hh-unifi` and `hh-firewalla` read the
+UniFi API key or the Firewalla MSP token from the vault and pass it to curl
+through a config file on stdin, never on the command line, so it never appears
+in `/proc` where the agent user could read it.
 Even a fully hijacked agent cannot exfiltrate a credential, because the OS will not
 let it read the vault and will not let it run anything but the broker as `hhvault`.
 The broker also refuses loopback targets and unregistered aliases.
@@ -237,6 +242,60 @@ contact (trust on first use, like SSH). If you later replace the console's
 certificate, `hh repin <alias>` accepts the new one; until you do, calls fail
 closed rather than quietly trusting a new identity.
 
+## Your Firewalla (read-only, on purpose)
+
+A Firewalla (Gold, Gold SE, Gold Plus, Purple, Blue Plus) can be registered the
+same way. It shows up in `hh list` like anything else, and `hh overview` and
+`hh inventory` include it:
+
+    MSP       yourname.firewalla.net
+    Box       Home Firewalla (gold, router mode, v1.975)   online   public IP 203.0.113.7
+    Counts    41 devices, 34 rules, 6 alarms
+    Devices   41 known, 39 online
+    Offline   2: Office Printer, Garage Camera
+    Alarms    3 most recent active:
+              08-19 21:04  Abnormal upload from Desktop-PC
+
+So "is that machine actually on the network", "what is eating my internet", "why
+can't this reach that", and "anything alarming overnight" become questions Claude
+answers from the router itself.
+
+One difference from UniFi worth knowing: Firewalla ships no supported local API,
+so this reads Firewalla MSP - Firewalla's own management portal - over the
+internet, at `https://<yourname>.firewalla.net`. You need an MSP account, and
+when your internet is down this is down with it, so it is a poor first probe for
+"is the internet up" and a good one for everything else.
+
+**It can only read. It cannot change anything on your network.** Note that here
+that rests on *one* lock rather than UniFi's two:
+
+1. The broker behind `hh firewalla` issues HTTP `GET` and has no code path that
+   can `POST`, `PUT`, `PATCH`, or `DELETE`. No pause, no unpause, no rule edit,
+   no rename, no reboot, because none of it is implemented.
+2. There is no second lock, and the setup says so out loud. Firewalla MSP has no
+   read-only token: a personal access token carries the permissions of the
+   account that made it. The GET-only broker is the only thing making that token
+   safe to hold, which is why it is worth reading `bin/hh-firewalla` before you
+   trust it, and why the token is stored where the agent cannot read it.
+3. The ops brain and the `firewalla-ops` skill tell Claude the rule plainly, and
+   tell it what to do instead: explain the change you should make in the
+   Firewalla app or MSP, then read the state back to confirm it worked.
+
+If you would rather not hold an MSP token at all, that is a legitimate choice.
+Skip this and keep reading your Firewalla in its own app; everything else in
+HomelabHero works without it.
+
+Register it from an admin shell (a token is a secret being typed, so it stays out
+of the chat, exactly like password auth):
+
+    hh add-firewalla
+
+It asks for your MSP domain - `yourname.firewalla.net`, not the box's LAN address
+- and the token, which it stores in the vault where the agent cannot read it.
+There is no TLS pin here, unlike UniFi: an MSP domain has a publicly trusted
+certificate, so ordinary CA verification already applies and is the stronger
+check.
+
 ## Adding servers from the UI
 
 You do not have to shell in to add machines. Just ask Claude in the browser, e.g.
@@ -303,6 +362,7 @@ auto-update runs it for you after each update.
     │   ├── hh                     control CLI (agent- and operator-facing)
     │   ├── hh-connect             privileged SSH broker (runs as hhvault)
     │   ├── hh-unifi               read-only UniFi API broker (runs as hhvault)
+    │   ├── hh-firewalla           read-only Firewalla MSP broker (runs as hhvault)
     │   ├── hh-provision           key-only host registration (UI-safe add)
     │   └── hh-update              the one update command: git pull + re-run
     │                              installer headless, then OS packages + doctor
@@ -311,7 +371,7 @@ auto-update runs it for you after each update.
     └── ops/                       becomes ~hhagent/homelab-ops (git-backed)
         ├── CLAUDE.md              always-loaded context + house rules
         ├── capabilities/          per-platform capability catalogs
-        │                          (proxmox, truenas, linux, unifi)
+        │                          (proxmox, truenas, linux, unifi, firewalla)
         ├── infra/                 environment-specific references
         ├── inventory/             saved inventory snapshots
         ├── runbooks/              resolved incidents accumulate here
@@ -319,9 +379,9 @@ auto-update runs it for you after each update.
             ├── settings.json      permission posture (forces the broker)
             └── skills/            triage, inventory, add-server, proxmox,
                                    truenas, truenas-middleware, docker,
-                                   host (linux), network, unifi (read-only),
-                                   backup-restore, security-audit,
-                                   patch-management, deploy-app
+                                   host (linux), network, unifi and firewalla
+                                   (both read-only), backup-restore,
+                                   security-audit, patch-management, deploy-app
 
 ## Platform notes
 
@@ -342,8 +402,14 @@ auto-update runs it for you after each update.
   so. Needs UniFi OS (UDM, UCG, UDR, Cloud Key Gen2+, UniFi OS Server) on
   Network 9.0 or newer, since API keys do not exist on the old self-hosted
   Network application.
-- No MCP servers and no Grafana/Prometheus. The whole surface is SSH, one
-  read-only router API, plus the capability catalogs, kept simple on purpose.
+- Firewalla: MSP personal access token, read-only, never SSH. Registered with
+  `hh add-firewalla` and reached with `hh firewalla <op>`; `hh run` refuses it and
+  says so. Firewalla ships no supported local API, so this goes through Firewalla
+  MSP over the internet and needs an MSP account - and it goes down when your
+  internet does. Unlike UniFi there is no view-only token to mint, so the
+  GET-only broker is the only thing keeping that token from being able to write.
+- No MCP servers and no Grafana/Prometheus. The whole surface is SSH, two
+  read-only router APIs, plus the capability catalogs, kept simple on purpose.
 
 ## Persistence and backup
 
