@@ -1,10 +1,11 @@
-# HomelabHero: the low-privilege agent user may run ONLY these three helpers,
+# HomelabHero: the low-privilege agent user may run ONLY these four helpers,
 # and ONLY as the vault user. hh-connect opens SSH connections; hh-unifi reads a
-# UniFi console over its API and is incapable of changing anything there;
-# hh-provision registers a host with a generated key. None of them exposes any
-# secret. Installed to /etc/sudoers.d/homelabhero (mode 0440), validated by
-# visudo.
+# UniFi console over its API and hh-firewalla reads a Firewalla over the MSP
+# API, and neither is capable of changing anything there; hh-provision registers
+# a host with a generated key. None of them exposes any secret. Installed to
+# /etc/sudoers.d/homelabhero (mode 0440), validated by visudo.
 Cmnd_Alias HH_BROKER    = /usr/local/bin/hh-connect
 Cmnd_Alias HH_UNIFI     = /usr/local/bin/hh-unifi
+Cmnd_Alias HH_FIREWALLA = /usr/local/bin/hh-firewalla
 Cmnd_Alias HH_PROVISION = /usr/local/bin/hh-provision
-hhagent ALL=(hhvault) NOPASSWD: HH_BROKER, HH_UNIFI, HH_PROVISION
+hhagent ALL=(hhvault) NOPASSWD: HH_BROKER, HH_UNIFI, HH_FIREWALLA, HH_PROVISION

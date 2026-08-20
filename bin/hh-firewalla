@@ -1,0 +1,425 @@
+#!/usr/bin/env bash
+#
+# hh-firewalla - HomelabHero Firewalla API broker.
+#
+# The Firewalla sibling of hh-unifi. It runs as the vault user (hhvault) through
+# the same narrow sudoers rule, reads a Firewalla MSP personal access token the
+# agent user cannot read, and queries the MSP API on the operator's behalf. It
+# never prints, echoes, or returns the token.
+#
+# READ-ONLY, BY CONSTRUCTION. This broker issues GET and nothing else. There is
+# no code path here that can POST, PUT, PATCH, or DELETE, so no prompt, no
+# jailbreak, and no mistake on the agent's side can reconfigure the network
+# through it. The router is the one thing in the homelab whose failure takes
+# away the very access you would need to fix it, so it is treated as a source of
+# truth to read and reason about, never as something to change. Changing
+# Firewalla stays where it belongs: in the Firewalla app or MSP, done by a
+# person.
+#
+# THE DIFFERENCE FROM UNIFI, AND WHY IT MATTERS. UniFi has two locks: this
+# broker's GET-only shape, and an API key minted under a View Only admin, so the
+# console itself refuses writes. Firewalla has ONE. An MSP personal access token
+# carries the permissions of the account that made it, and MSP has no read-only
+# token scope to mint instead - the same token that reads devices can pause a
+# rule or rename a device. So the GET-only shape here is not a second lock, it
+# is the only lock, and every line below is written to keep it that way:
+#   * the verb is not a parameter anywhere in this file;
+#   * _get() hardcodes -X GET and curl's --get, so even the query builder cannot
+#     turn into a body;
+#   * the raw escape hatch takes a path, never a method.
+# Treat any change that makes the method reachable from an argument as a change
+# to the security model, not a refactor.
+#
+# WHERE THIS TALKS TO. Firewalla has no supported local API on the box, so this
+# goes to the MSP cloud endpoint (https://<your-domain>.firewalla.net/v2/...),
+# which is a public host with a publicly trusted certificate. That is why there
+# is no TLS pinning here and hh-unifi has it: pinning exists to make a
+# self-signed LAN certificate trustworthy, and normal CA verification is the
+# stronger answer when the far end has a real one. Certificate verification is
+# never disabled in this file.
+#
+# Usage: hh-firewalla <op> <alias> [args...]
+#
+# Argument order is op-first (hh-connect is alias-first) for the same reason as
+# hh-unifi: the hh CLI passes it straight through, and Claude's permission rules
+# match on a command PREFIX, so op-first keeps read ops individually allowable.
+#
+set -euo pipefail
+
+REG_DIR="/etc/homelabhero/hosts.d"
+VAULT_DIR="/etc/homelabhero/vault"
+AUDIT_LOG="/var/log/homelabhero-broker.log"
+NAME_RE='^[A-Za-z0-9._-]+$'
+TIMEOUT=20
+
+# Everything lives under /v2 on the MSP domain.
+API="/v2"
+
+die() { printf 'hh-firewalla: %s\n' "$*" >&2; exit 2; }
+
+[ "$#" -ge 2 ] || die "usage: hh-firewalla <op> <alias> [args...]"
+OP="$1"; ALIAS="$2"; shift 2
+
+[[ "$ALIAS" =~ $NAME_RE ]] || die "invalid alias"
+CONF="${REG_DIR}/${ALIAS}.conf"
+[ -f "$CONF" ] || die "no such registered host: ${ALIAS}"
+
+# Parse the registry entry safely (no sourcing). Only known keys are accepted.
+# Split on the FIRST '=' by hand rather than with IFS='=', because a value is
+# allowed to contain one.
+HOST=""; PORT="443"; AUTH=""; CRED=""; PLATFORM=""
+while IFS= read -r line || [ -n "$line" ]; do
+  case "$line" in ''|\#*) continue ;; *=*) : ;; *) continue ;; esac
+  key="${line%%=*}"; val="${line#*=}"
+  key="${key//[[:space:]]/}"
+  val="${val%\"}"; val="${val#\"}"; val="${val## }"; val="${val%% }"
+  case "$key" in
+    HOST)     HOST="$val" ;;
+    PORT)     PORT="$val" ;;
+    AUTH)     AUTH="$val" ;;
+    CRED)     CRED="$val" ;;
+    PLATFORM) PLATFORM="$val" ;;
+  esac
+done < "$CONF"
+
+[ "$PLATFORM" = "firewalla" ] || die "'${ALIAS}' is not a Firewalla MSP host (PLATFORM=${PLATFORM:-none})"
+[ "$AUTH" = "token" ] || die "'${ALIAS}' is not a token host (AUTH=${AUTH:-none})"
+[ -n "$HOST" ] || die "registry entry missing HOST"
+[ -n "$CRED" ] || die "registry entry missing CRED"
+[[ "$PORT" =~ ^[0-9]+$ ]] || die "invalid PORT"
+[[ "$CRED" =~ $NAME_RE ]] || die "invalid credential reference"
+
+# Same rule as hh-connect and hh-unifi: never let the broker be turned inward on
+# this machine, which is where the vault lives.
+case "$HOST" in
+  127.*|::1|localhost|localhost.*) die "refusing loopback target" ;;
+esac
+
+CREDFILE="${VAULT_DIR}/${CRED}"
+[ -f "$CREDFILE" ] || die "credential not found in vault"
+case "$(readlink -f "$CREDFILE")" in
+  "${VAULT_DIR}/"*) : ;;
+  *) die "credential path escapes vault" ;;
+esac
+TOKEN="$(tr -d '\r\n' <"$CREDFILE")"
+[ -n "$TOKEN" ] || die "credential is empty"
+
+BASE="https://${HOST}:${PORT}"
+
+audit() { printf '%s\t%s\tFIREWALLA %s\t%s\n' \
+  "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$ALIAS" "$HOST" "$*" \
+  >>"$AUDIT_LOG" 2>/dev/null || true; }
+
+# ---------------------------------------------------------------------------
+# HTTP
+
+# Perform one GET and print the response body. Dies with a plain-language
+# message on anything that is not a success status, because the caller of this
+# broker is usually an LLM relaying the result to a human.
+#
+# Extra arguments are query parameters as name=value; they are URL-encoded by
+# curl (the MSP API requires the query string to be encoded) and appended with
+# --get, which is what keeps them a query string rather than a request body.
+#
+# There is deliberately no method argument. Making the verb un-passable is the
+# whole enforcement: a read-only rule written in a comment is a request, but a
+# function that cannot express a write is a guarantee. This matters more here
+# than it does for UniFi - see the header - because it is the only thing
+# standing between this token and a network change.
+_get() {
+  local path="$1"; shift
+  local args=(-sS -m "$TIMEOUT" --get -X GET -H 'Accept: application/json' -w '\n%{http_code}')
+  local kv
+  for kv in "$@"; do args+=(--data-urlencode "$kv"); done
+
+  local errf resp rc=0
+  errf="$(mktemp)"
+  # The token goes in through a curl config file on stdin, never argv and never
+  # the environment. /proc/<pid>/cmdline is world readable, so a token passed as
+  # -H "Authorization: ..." would be readable by the very agent user this broker
+  # exists to keep it away from. printf is a shell builtin, so it does not leak
+  # through a process of its own either.
+  resp="$(printf 'header = "Authorization: Token %s"\n' "$TOKEN" \
+    | curl -K - "${args[@]}" "${BASE}${path}" 2>"$errf")" || rc=$?
+  local err; err="$(tr -d '\r' <"$errf")"; rm -f "$errf"
+
+  if [ "$rc" -ne 0 ]; then
+    case "$rc" in
+      6)  die "cannot resolve ${HOST}. That is the MSP domain, not the Firewalla box
+    on your LAN - it looks like 'yourname.firewalla.net'. Re-register with the
+    right one: hh rm-host ${ALIAS} && hh add-firewalla" ;;
+      28) die "timed out after ${TIMEOUT}s talking to ${HOST}" ;;
+      7)  die "cannot connect to ${HOST}:${PORT} (is this box online, and does it have internet?)" ;;
+      35|51|60) die "TLS verification failed for ${HOST}: ${err:-no detail}
+    The MSP domain has a publicly trusted certificate, so this should not happen.
+    Suspect the network path (a filtering proxy or interception) before the
+    endpoint, and do not work around it by disabling verification." ;;
+      *)  die "request failed (curl ${rc}): ${err:-no detail}" ;;
+    esac
+  fi
+
+  local code="${resp##*$'\n'}" out="${resp%$'\n'*}"
+  case "$code" in
+    2*) printf '%s' "$out" ;;
+    401|403) die "the Firewalla MSP token was rejected (HTTP ${code}). Create a new
+    personal access token in MSP under Account Settings -> Create New Token,
+    then re-register from an admin shell:
+        hh rm-host ${ALIAS} && hh add-firewalla" ;;
+    404) die "no such API path on this MSP (HTTP 404): ${path}" ;;
+    429) die "rate limited by MSP (HTTP 429); retry in a moment" ;;
+    *)   die "HTTP ${code} from ${path}: $(printf '%s' "$out" | tr -d '\n' | cut -c1-200)" ;;
+  esac
+}
+
+# Guard against a silently empty section. A response that is not the shape we
+# expect is reported as such rather than printed as "nothing found", because
+# those two look identical to a reader and only one of them is true.
+_expect_array() {
+  printf '%s' "$1" | jq -e 'type == "array"' >/dev/null 2>&1 && return 0
+  die "unexpected response from ${2}: $(printf '%s' "$1" | tr -d '\n' | cut -c1-160)"
+}
+_expect_results() {
+  printf '%s' "$1" | jq -e 'has("results")' >/dev/null 2>&1 && return 0
+  die "unexpected response from ${2}: $(printf '%s' "$1" | tr -d '\n' | cut -c1-160)"
+}
+
+# Shared jq helpers: human-readable bytes, and a timestamp in local time where
+# jq supports it (falling back to UTC where it does not).
+JQ_FMT='
+def hb: if . == null then "-"
+        elif . >= 1073741824 then "\((. / 1073741824 * 10 | floor) / 10) GB"
+        elif . >= 1048576 then "\((. / 1048576 * 10 | floor) / 10) MB"
+        elif . >= 1024 then "\((. / 1024 | floor)) KB"
+        else "\(.) B" end;
+def when: if . == null or . == 0 then "-"
+          else (. | tonumber | floor | strflocaltime("%m-%d %H:%M")) end;
+'
+
+# The number of rows an op should return. Guards the API limit (<=500) and keeps
+# a typo from turning into an unbounded page.
+_limit() {
+  local n="${1:-$2}"
+  [[ "$n" =~ ^[0-9]+$ ]] || die "expected a number of rows, got: ${n}"
+  [ "$n" -ge 1 ] || die "row count must be at least 1"
+  [ "$n" -le 500 ] || die "row count must be 500 or less (the MSP API caps a page there)"
+  printf '%s' "$n"
+}
+
+_check_path() {
+  local p="$1"
+  case "$p" in
+    /v2/*) : ;;
+    *) die "path must start with /v2/ (got: ${p})" ;;
+  esac
+  case "$p" in *..*) die "path may not contain '..'" ;; esac
+}
+
+# ---------------------------------------------------------------------------
+# Ops
+
+op_info() { _get "${API}/boxes"; }
+
+op_ping() {
+  local j n
+  j="$(_get "${API}/boxes")"
+  _expect_array "$j" "${API}/boxes"
+  n="$(printf '%s' "$j" | jq -r 'length')"
+  [ "$n" -gt 0 ] || die "the token works, but this MSP has no Firewalla boxes in it"
+  printf 'firewalla-ok %s (%s)\n' "$HOST" \
+    "$(printf '%s' "$j" | jq -r '[.[] | "\(.name // "?") \(.model // "?") v\(.version // "?") \(if .online then "online" else "OFFLINE" end)"] | join(", ")')"
+}
+
+op_boxes() {
+  local j; j="$(_get "${API}/boxes")"
+  _expect_array "$j" "${API}/boxes"
+  printf '%s' "$j" | jq -r '.[] |
+      "\(.name // "?")\t\(.model // "?")\t\(.mode // "-")\t\(.version // "-")\t\(if .online then "online" else "OFFLINE" end)\t\(.publicIP // "-")\t\(.deviceCount // 0)\t\(.ruleCount // 0)\t\(.alarmCount // 0)"' \
+    | awk -F'\t' 'BEGIN{printf "%-22s %-8s %-8s %-9s %-8s %-16s %6s %6s %6s\n","NAME","MODEL","MODE","VERSION","STATE","PUBLIC IP","DEVS","RULES","ALARMS"}
+                  {printf "%-22s %-8s %-8s %-9s %-8s %-16s %6s %6s %6s\n",$1,$2,$3,$4,$5,$6,$7,$8,$9}'
+}
+
+op_devices() {
+  local j; j="$(_get "${API}/devices")"
+  _expect_array "$j" "${API}/devices"
+  printf '%s' "$j" | jq -r "${JQ_FMT}"'
+    .[] | "\(.name // "?")\t\(.ip // "-")\t\(.id // "-")\t\(if .online then "online" else "OFFLINE" end)\t\(.network.name // "-")\t\(.group.name // "-")\t\(.lastSeen | when)\t\((.totalDownload // 0) | hb)\t\((.totalUpload // 0) | hb)"' \
+    | sort -t"$(printf '\t')" -k4,4 -k1,1 \
+    | awk -F'\t' 'BEGIN{printf "%-26s %-16s %-18s %-8s %-14s %-10s %-12s %10s %10s\n","NAME","IP","MAC","STATE","NETWORK","GROUP","LAST SEEN","DOWN","UP"}
+                  {printf "%-26s %-16s %-18s %-8s %-14s %-10s %-12s %10s %10s\n",$1,$2,$3,$4,$5,$6,$7,$8,$9}'
+}
+
+# One device in full. The MSP API has no per-device GET, so this reads the
+# device list and picks out the match here - by MAC, or by a case-insensitive
+# substring of the name, since a person asking about "the printer" has the name
+# and not the MAC.
+op_device() {
+  [ "$#" -ge 1 ] || die "usage: hh firewalla device [alias] <mac-or-name>"
+  local q="$1" j out
+  j="$(_get "${API}/devices")"
+  _expect_array "$j" "${API}/devices"
+  out="$(printf '%s' "$j" | jq --arg q "$q" '[ .[] |
+    select((.id // "" | ascii_downcase) == ($q | ascii_downcase)
+        or ((.name // "") | ascii_downcase | contains($q | ascii_downcase))) ]')"
+  [ "$(printf '%s' "$out" | jq -r 'length')" -gt 0 ] \
+    || die "no device matches '${q}' (list them with: hh firewalla devices)"
+  printf '%s' "$out" | jq '.'
+}
+
+op_alarms() {
+  local n; n="$(_limit "${1:-}" 20)"
+  local j; j="$(_get "${API}/alarms" "query=status:active" "sortBy=ts:desc" "limit=${n}")"
+  _expect_results "$j" "${API}/alarms"
+  if [ "$(printf '%s' "$j" | jq -r '.results | length')" -eq 0 ]; then
+    echo "No active alarms."
+    return 0
+  fi
+  printf '%s' "$j" | jq -r "${JQ_FMT}"'
+    .results[] | "\(.ts | when)\t\(.aid // "-")\t\(.type // "-")\t\(.device.name // "-")\t\((.message // "") | gsub("\\s+"; " "))"' \
+    | awk -F'\t' 'BEGIN{printf "%-12s %-8s %-5s %-20s %s\n","WHEN","ID","TYPE","DEVICE","MESSAGE"}
+                  {printf "%-12s %-8s %-5s %-20s %s\n",$1,$2,$3,$4,$5}'
+}
+
+op_flows() {
+  local n; n="$(_limit "${1:-}" 20)"
+  local j; j="$(_get "${API}/flows" "sortBy=ts:desc" "limit=${n}")"
+  _expect_results "$j" "${API}/flows"
+  printf '%s' "$j" | jq -r "${JQ_FMT}"'
+    .results[] | "\(.ts | when)\t\(.device.name // "-")\t\(if .block then "BLOCKED" else (.direction // "-") end)\t\(.protocol // "-")\t\(.destination.name // .destination.ip // "-")\t\(.category // "-")\t\((.download // 0) | hb)\t\((.upload // 0) | hb)"' \
+    | awk -F'\t' 'BEGIN{printf "%-12s %-20s %-9s %-5s %-30s %-10s %10s %10s\n","WHEN","DEVICE","DIRECTION","PROTO","DESTINATION","CATEGORY","DOWN","UP"}
+                  {printf "%-12s %-20s %-9s %-5s %-30s %-10s %10s %10s\n",$1,$2,$3,$4,$5,$6,$7,$8}'
+}
+
+# Top talkers over the last 24 hours. This is the question people actually ask
+# of a router ("what is eating the internet"), and it is one grouped query.
+op_bandwidth() {
+  local n; n="$(_limit "${1:-}" 10)"
+  local now begin
+  now="$(date +%s)"; begin=$((now - 86400))
+  local j; j="$(_get "${API}/flows" "query=ts:${begin}-${now}" "groupBy=device" "sortBy=total:desc" "limit=${n}")"
+  _expect_results "$j" "${API}/flows"
+  echo "Top ${n} devices by traffic, last 24 hours:"
+  printf '%s' "$j" | jq -r "${JQ_FMT}"'
+    .results[] | "\(.device.name // "?")\t\(.device.ip // "-")\t\((.download // 0) | hb)\t\((.upload // 0) | hb)\t\((.total // 0) | hb)"' \
+    | awk -F'\t' 'BEGIN{printf "%-28s %-16s %10s %10s %10s\n","DEVICE","IP","DOWN","UP","TOTAL"}
+                  {printf "%-28s %-16s %10s %10s %10s\n",$1,$2,$3,$4,$5}'
+}
+
+op_rules() {
+  local j; j="$(_get "${API}/rules")"
+  _expect_results "$j" "${API}/rules"
+  printf '%s' "$j" | jq -r '
+    .results[] | "\(.action // "-")\t\(.status // "-")\t\(.direction // "-")\t\(.target.type // "-"):\(.target.value // "-")\t\(.scope.type // "all"):\(.scope.value // "-")\t\((.notes // "") | gsub("\\s+"; " "))"' \
+    | awk -F'\t' 'BEGIN{printf "%-8s %-8s %-12s %-34s %-26s %s\n","ACTION","STATUS","DIRECTION","TARGET","SCOPE","NOTES"}
+                  {printf "%-8s %-8s %-12s %-34s %-26s %s\n",$1,$2,$3,$4,$5,$6}'
+}
+
+op_lists() {
+  local j; j="$(_get "${API}/target-lists")"
+  _expect_array "$j" "${API}/target-lists"
+  printf '%s' "$j" | jq -r "${JQ_FMT}"'
+    .[] | "\(.name // "?")\t\(.id // "-")\t\(.owner // "-")\t\(.category // "-")\t\((.targets // []) | length)\t\(.lastUpdated | when)"' \
+    | awk -F'\t' 'BEGIN{printf "%-28s %-40s %-10s %-10s %8s %-12s\n","NAME","ID","OWNER","CATEGORY","TARGETS","UPDATED"}
+                  {printf "%-28s %-40s %-10s %-10s %8s %-12s\n",$1,$2,$3,$4,$5,$6}'
+}
+
+op_trends() {
+  local what="${1:-}"
+  case "$what" in
+    flows|alarms|rules) : ;;
+    *) die "usage: hh firewalla trends [alias] <flows|alarms|rules>" ;;
+  esac
+  local j; j="$(_get "${API}/trends/${what}")"
+  _expect_array "$j" "${API}/trends/${what}"
+  printf '%s' "$j" | jq -r "${JQ_FMT}"'
+    sort_by(.ts) | .[] | "\(.ts | tonumber | floor | strflocaltime("%Y-%m-%d"))\t\(.value // 0)"' \
+    | awk -F'\t' -v w="$what" 'BEGIN{printf "%-12s %s\n","DAY",toupper(w)} {printf "%-12s %s\n",$1,$2}'
+}
+
+op_stats() {
+  local what="${1:-}"
+  case "$what" in
+    topBoxesByBlockedFlows|topBoxesBySecurityAlarms|topRegionsByBlockedFlows) : ;;
+    *) die "usage: hh firewalla stats [alias] <topBoxesByBlockedFlows|topBoxesBySecurityAlarms|topRegionsByBlockedFlows>" ;;
+  esac
+  local j; j="$(_get "${API}/stats/${what}")"
+  _expect_array "$j" "${API}/stats/${what}"
+  printf '%s' "$j" | jq -r '.[] | "\(.meta.name // .meta.code // .meta.gid // "?")\t\(.value // 0)"' \
+    | awk -F'\t' 'BEGIN{printf "%-30s %s\n","NAME","VALUE"} {printf "%-30s %s\n",$1,$2}'
+}
+
+# The compact block hh overview and hh inventory print.
+#
+# Note on error handling: die() runs `exit`, and an `exit` inside a command
+# substitution ends that subshell outright - an `|| true` written INSIDE the
+# substitution never runs. Every tolerated call below therefore puts its
+# fallback OUTSIDE the substitution, where it sees the real status.
+op_summary() {
+  local boxes dev alarms
+
+  # Deliberately NOT tolerated: if MSP cannot be reached or the token is
+  # refused, that is the answer, and it should be reported rather than papered
+  # over with a header and a set of blank sections.
+  boxes="$(_get "${API}/boxes")"
+  _expect_array "$boxes" "${API}/boxes"
+  printf 'MSP       %s\n' "$HOST"
+  printf '%s' "$boxes" | jq -r '.[] |
+    "Box       \(.name // "?") (\(.model // "?"), \(.mode // "?" ) mode, v\(.version // "?"))   \(if .online then "online" else "OFFLINE" end)   public IP \(.publicIP // "?")"'
+  printf '%s' "$boxes" | jq -r '"Counts    \([.[] | .deviceCount // 0] | add // 0) devices, \([.[] | .ruleCount // 0] | add // 0) rules, \([.[] | .alarmCount // 0] | add // 0) alarms"'
+
+  dev="$(_get "${API}/devices" 2>/dev/null)" || dev=""
+  if printf '%s' "$dev" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    printf '%s' "$dev" | jq -r '"Devices   \(length) known, \([.[] | select(.online)] | length) online"'
+    # An offline device that used to be online is the single most common thing a
+    # person wants named rather than counted, so name a few.
+    printf '%s' "$dev" | jq -r '[.[] | select(.online | not) | .name // "?"] |
+      if length > 0 then "Offline   \(length): \(.[0:8] | join(", "))\(if length > 8 then ", ..." else "" end)" else empty end'
+  fi
+
+  alarms="$(_get "${API}/alarms" "query=status:active" "sortBy=ts:desc" "limit=5" 2>/dev/null)" || alarms=""
+  if printf '%s' "$alarms" | jq -e 'has("results")' >/dev/null 2>&1; then
+    printf '%s' "$alarms" | jq -r "${JQ_FMT}"'
+      if (.results | length) == 0 then "Alarms    none active"
+      else "Alarms    \(.results | length) most recent active:", (.results[] | "          \(.ts | when)  \((.message // "") | gsub("\\s+"; " "))")
+      end'
+  fi
+}
+
+# Escape hatch: any GET under /v2/. This covers everything the named ops do not
+# without this broker having to grow an op per endpoint, and without giving up
+# the read-only guarantee, since it can still only issue a GET.
+op_get() {
+  [ "$#" -ge 1 ] || die "usage: hh firewalla get [alias] </v2/...> [name=value ...]"
+  local p="$1"; shift
+  _check_path "$p"
+  _get "$p" "$@"
+}
+
+audit "$OP $*"
+
+case "$OP" in
+  ping)      op_ping ;;
+  info)      op_info ;;
+  summary)   op_summary ;;
+  boxes)     op_boxes ;;
+  devices)   op_devices ;;
+  device)    op_device "$@" ;;
+  alarms)    op_alarms "$@" ;;
+  flows)     op_flows "$@" ;;
+  bandwidth) op_bandwidth "$@" ;;
+  rules)     op_rules ;;
+  lists)     op_lists ;;
+  trends)    op_trends "$@" ;;
+  stats)     op_stats "$@" ;;
+  get)       op_get "$@" ;;
+  # Every op above is a GET. There is no write op, and adding one would mean
+  # adding a write path to _get, which is the line this broker does not cross.
+  # It matters more here than on UniFi: an MSP token has no read-only scope, so
+  # this shape is the only thing that makes the token safe to hold.
+  pause|unpause|block|unblock|allow|create|delete|update|patch|post|put|rename|reboot|restart|raw)
+    die "this broker is read-only: it can only read from Firewalla, never change it.
+    '${OP}' would change your network, so it is not implemented here at all.
+    Make the change yourself in the Firewalla app or in MSP. HomelabHero can tell
+    you exactly what to change and why, and confirm the result afterwards with
+    'hh firewalla summary'." ;;
+  *) die "unknown op: ${OP} (ping info summary boxes devices device alarms flows bandwidth rules lists trends stats get)" ;;
+esac

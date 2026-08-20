@@ -24,6 +24,80 @@ easy to get wrong and changes if a date is added to the heading.
 When adding a version, keep the three in sync: the anchor (`v1-1-0`), the git
 tag (`v1.1.0`), and `HH_VERSION` in `bin/hh` (`1.1.0`).
 
+<a id="v1-3-0"></a>
+
+## 1.3.0 (2026-08-20)
+
+Firewalla routers can be read the way UniFi consoles already could, and a
+natively installed Claude Code survives the weekly update.
+
+### Added
+
+- Read-only Firewalla support. A Firewalla (Gold, Gold SE, Gold Plus, Purple,
+  Blue Plus) registers with `hh add-firewalla` and is read with
+  `hh firewalla <op>`: `summary`, `boxes`, `devices`, `device`, `alarms`,
+  `flows`, `bandwidth`, `rules`, `lists`, `trends`, `stats`, `info`, `ping`,
+  and a raw `get` escape hatch for any other MSP endpoint. It appears in
+  `hh list` with platform `firewalla`, and `hh overview`, `hh inventory`,
+  `hh test`, and `hh doctor` all include it. `hh run` refuses it and says why,
+  the same as for a UniFi console.
+
+  Firewalla ships no supported local API, so this reads Firewalla MSP -
+  Firewalla's own management portal - over the internet, which means an MSP
+  account is required and the integration goes down when your internet does.
+  That makes it a poor first probe for "is the internet up" and a good one for
+  everything else.
+
+  It is read-only by construction: `hh-firewalla` issues HTTP GET and has no
+  code path that can POST, PUT, PATCH, or DELETE. That guarantee carries more
+  weight here than it does on UniFi. A UniFi API key is minted under a View Only
+  admin, so the console refuses writes on its own; Firewalla MSP has no
+  read-only token scope, so the token in the vault carries the account's full
+  permissions and the GET-only broker is the only thing making it safe to hold.
+  The token is stored in the vault where the agent user cannot read it and is
+  passed to curl through a config file on stdin, never on the command line. The
+  new `firewalla-ops` skill and `capabilities/firewalla.md` tell Claude the rule
+  plainly, and tell it what to do instead when a change is genuinely needed.
+
+  There is no TLS pin, unlike UniFi, and that is deliberate: pinning exists to
+  make a self-signed LAN certificate trustworthy, and an MSP domain is a public
+  host with a publicly trusted certificate, so ordinary CA verification applies
+  and is the stronger check. Certificate verification is never disabled.
+
+  Thanks to @lesterktm for the request and the research that started it.
+
+### Fixed
+
+- A native Claude Code install now survives, and is preferred. On some machines
+  npm never resolves the platform-specific optional dependency that carries the
+  actual claude binary (`@anthropic-ai/claude-code-linux-x64`): the install
+  reports success, lands one package instead of two, and leaves a claude that
+  cannot start, so the command center service crash-loops. Anthropic's native
+  installer works on those boxes, but nothing here could see or keep its result.
+
+  Two things blocked it. The generated systemd unit built its `PATH` from the
+  nvm prefix alone, so a native claude in `~/.local/bin` was invisible to the
+  service; that directory is now first on the unit's PATH, and on the PATH
+  `hh doctor` and `hh login` use, so all three agree on which claude the box
+  runs. And `hh update` re-runs the installer weekly, so the unconditional npm
+  install recreated its bin link and clobbered any native install on every cron
+  run - the same weekly-clobber dynamic the `--allow-scripts` fix had to solve
+  one layer up. A working native claude now wins: the npm `claude-code` package
+  is skipped entirely while one is present, and it keeps itself updated anyway.
+
+  When there is no native install, the npm result is no longer taken on trust.
+  The installer runs it, and if it cannot start, falls back to Anthropic's
+  native installer, verifies that, and retires the broken npm copy so exactly
+  one claude is left on the box.
+
+  Thanks to @escrima76 for the detailed report.
+
+### Changed
+
+- `hh doctor` prints the path claude was resolved from next to its version.
+  When an npm copy and a native copy disagree, which one the box actually runs
+  is the first thing worth knowing.
+
 <a id="v1-2-1"></a>
 
 ## 1.2.1 (2026-08-15)

@@ -10,7 +10,9 @@ User=hhagent
 WorkingDirectory=__AGENT_HOME__/homelab-ops
 EnvironmentFile=/etc/homelabhero/cloudcli.env
 Environment=HOME=__AGENT_HOME__
-Environment=PATH=__NODE_BIN__:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# ~/.local/bin comes FIRST: that is where Anthropic's native installer puts
+# claude, and a native install must be visible to (and win for) the service.
+Environment=PATH=__AGENT_HOME__/.local/bin:__NODE_BIN__:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=__CLOUDCLI__
 Restart=always
 RestartSec=5

@@ -4,7 +4,7 @@
 _hh() {
   local cur sub subs aliases
   cur="${COMP_WORDS[COMP_CWORD]}"
-  subs="list run test overview inventory diff scan unifi doctor provision add-host add-unifi repin rm-host update login audit version help"
+  subs="list run test overview inventory diff scan unifi firewalla doctor provision add-host add-unifi add-firewalla repin rm-host update login audit version help"
 
   if [ "$COMP_CWORD" -eq 1 ]; then
     mapfile -t COMPREPLY < <(compgen -W "$subs" -- "$cur")
@@ -30,6 +30,17 @@ _hh() {
       elif [ "$COMP_CWORD" -eq 3 ]; then
         aliases="$(cd /etc/homelabhero/hosts.d 2>/dev/null && \
           for f in *.conf; do [ -e "$f" ] && grep -q '^AUTH=apikey' "$f" && printf '%s\n' "${f%.conf}"; done)"
+        mapfile -t COMPREPLY < <(compgen -W "$aliases" -- "$cur")
+      fi
+      ;;
+    firewalla)
+      # Same shape as unifi, and read-only for the same reason: there is no
+      # write op to complete because none exists.
+      if [ "$COMP_CWORD" -eq 2 ]; then
+        mapfile -t COMPREPLY < <(compgen -W "summary ping info boxes devices device alarms flows bandwidth rules lists trends stats get" -- "$cur")
+      elif [ "$COMP_CWORD" -eq 3 ]; then
+        aliases="$(cd /etc/homelabhero/hosts.d 2>/dev/null && \
+          for f in *.conf; do [ -e "$f" ] && grep -q '^PLATFORM=firewalla' "$f" && printf '%s\n' "${f%.conf}"; done)"
         mapfile -t COMPREPLY < <(compgen -W "$aliases" -- "$cur")
       fi
       ;;
