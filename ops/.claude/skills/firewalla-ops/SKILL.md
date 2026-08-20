@@ -25,6 +25,20 @@ Everything goes through one command:
 The alias can be omitted when only one Firewalla is registered, which is the
 normal case. `hh list` shows it with platform `firewalla` and auth `token`.
 
+**One alias means one box.** An MSP token sees the whole account, so each alias
+is pinned to a single Firewalla at registration and every read is filtered to it.
+If Evan has boxes at two sites, they are two aliases, and you must name which
+one you mean: `hh firewalla devices cabin`. `hh firewalla boxes` lists every box
+the token can see and marks the one an alias reads. Three ops are account-wide
+on purpose - `boxes`, `ping`, and `stats` - and `trends` is account-wide for a
+different reason (see below).
+
+If a per-box op refuses because an alias is not pinned, that refusal is correct
+and is not something to work around with the raw `get` escape hatch. Answering
+from the wrong site looks exactly like answering from the right one. Tell Evan
+to re-register the alias (`hh rm-host <alias> && hh add-firewalla`, which asks
+which box) rather than reaching around it.
+
 ## THIS IS READ-ONLY. DO NOT TRY TO CHANGE THE NETWORK.
 
 Say it plainly to yourself before every Firewalla task: **you can look, you
@@ -63,7 +77,8 @@ hardware. Nothing an agent could usefully automate here is worth that risk.
 
     hh firewalla summary        the one-screen picture: box, firmware, public IP,
                                 device counts, who is offline, recent alarms
-    hh firewalla boxes          every Firewalla in the MSP account
+    hh firewalla boxes          every Firewalla the token can see, marking which
+                                one this alias reads
     hh firewalla devices        every known device: IP, MAC, state, network, group
     hh firewalla device <q>     one device in full, by MAC or by name substring
     hh firewalla alarms [n]     active alarms, newest first (default 20)
@@ -82,12 +97,26 @@ whether to go deeper into devices, alarms, or traffic.
 For anything the named ops do not cover, there is a raw GET escape hatch. It is
 still read-only, and query parameters are URL-encoded for you:
 
-    hh firewalla get '/v2/alarms' 'query=type:8 status:active' 'limit=50'
-    hh firewalla get '/v2/flows' 'query=device.name:*iphone* total:>50MB'
-    hh firewalla get '/v2/rules' 'query=status:paused action:allow'
+    hh firewalla get '/v2/alarms' 'query=box.id:{gid} type:8 status:active' 'limit=50'
+    hh firewalla get '/v2/flows' 'query=box.id:{gid} device.name:*iphone* total:>50MB'
+    hh firewalla get '/v2/rules' 'query=box.id:{gid} status:paused action:allow'
+
+`{gid}` expands to the box this alias is pinned to. Always include it. A raw
+query without it reads the whole MSP account, which on a multi-box account
+quietly mixes in another site - the named ops all scope themselves, and an
+ad-hoc query has to do the same.
 
 The query syntax and the full qualifier list are in
 `capabilities/firewalla.md`.
+
+## Trends are account-wide, and that is not a bug to route around
+
+`hh firewalla trends` filters by MSP group, not by box, so on a multi-box
+account it reports the whole account however the alias is pinned. The output
+says so. Do NOT present those numbers as one box's. If Evan wants per-box
+trends, the fix is on his side: put the box in an MSP group of its own, then
+read that group with `hh firewalla get '/v2/trends/flows' 'group=<id>'`. On a
+single-box account none of this applies.
 
 ## One thing to know before you use this in an outage
 

@@ -11,11 +11,33 @@ Firewalla ships no supported local API on the box, so HomelabHero reads it
 through Firewalla MSP - Firewalla's own management portal - at
 `https://<yourname>.firewalla.net/v2/...`. That means:
 
-- The MSP account is the source of truth, and it sees every box in the account,
-  not just one. `hh firewalla boxes` lists them.
 - Reads go out to the internet and back. If the internet is down, this is one
   of the things that stops working, which makes `hh firewalla` a poor first
   probe for "is my internet down" and a good one for everything else.
+
+## One alias means one box
+
+An MSP token is scoped to an ACCOUNT, not to a box, so the API will happily
+answer for every Firewalla the account can see. A registered alias means one
+box, so it is pinned to one at registration (`GID=` in the registry entry) and
+every per-box op filters on it. On an account with one box that pin is resolved
+silently and nothing about this is visible.
+
+Three ops are account-wide on purpose, and say so:
+
+- `boxes` - every box the token can see, which is how you find the others. The
+  last column marks the one this alias reads.
+- `ping` - a connectivity check, which must stay answerable before a pin exists.
+- `stats` - every supported type ranks boxes or regions against each other, so
+  there would be nothing to rank within one box.
+
+If an alias is somehow NOT pinned and the account has more than one box, the
+per-box ops refuse rather than guess. That refusal is the correct answer, not a
+fault to work around: a plausible-looking table from the wrong site is worse
+than no table. Register each box as its own alias (`hh add-firewalla`, once per
+box, same token), and use `hh firewalla <op> <alias>` to say which you mean.
+
+Trends are the exception to all of this: see below.
 
 ## Read-only, with no exceptions - and it matters more here
 
@@ -40,8 +62,8 @@ verify the result by reading it back. See the firewalla-ops skill.
 ## Overall state
 
 - One-screen picture: `hh firewalla summary`
-- Every box in the MSP with model, mode, firmware, public IP, counts:
-  `hh firewalla boxes`
+- Every box the token can see, with model, mode, firmware, public IP, counts,
+  and which one this alias reads: `hh firewalla boxes`
 - Raw box JSON: `hh firewalla info`
 - Reachability check: `hh firewalla ping`
 
@@ -88,17 +110,34 @@ entry explains it far more often than the service does.
 - MSP-wide statistics: `hh firewalla stats <topBoxesByBlockedFlows |
   topBoxesBySecurityAlarms | topRegionsByBlockedFlows>`
 
+`trends` is the one read that the box pin does NOT narrow, because the endpoint
+filters by MSP GROUP rather than by box. On a single-box account that makes no
+difference. On a multi-box account it covers the whole account, and the output
+says so rather than letting an account-wide number pass as this box's.
+
+Putting a box in an MSP group of its own is what unlocks per-box trends. Once it
+is grouped, ask for that group through the escape hatch:
+
+    hh firewalla get '/v2/trends/flows' 'group=<group-id>'
+
+Per-box numbers obtained this way sum back to the account-wide total, so the two
+views stay consistent.
+
 ## Anything else (raw GET)
 
 The named ops cover the common ground. For the rest, a read-only escape hatch
 takes any path under `/v2/`, plus optional `name=value` query parameters which
 are URL-encoded for you (the MSP API requires that):
 
-    hh firewalla get '/v2/devices' 'box=<gid>'
-    hh firewalla get '/v2/alarms' 'query=type:8 status:active' 'limit=50'
-    hh firewalla get '/v2/flows' 'query=device.name:*iphone* total:>50MB'
-    hh firewalla get '/v2/rules' 'query=status:paused action:allow'
-    hh firewalla get '/v2/target-lists' 'owner=global'
+    hh firewalla get '/v2/devices' 'box={gid}'
+    hh firewalla get '/v2/alarms' 'query=box.id:{gid} type:8 status:active' 'limit=50'
+    hh firewalla get '/v2/flows' 'query=box.id:{gid} device.name:*iphone* total:>50MB'
+    hh firewalla get '/v2/rules' 'query=box.id:{gid} status:paused action:allow'
+    hh firewalla get '/v2/target-lists' 'owner=global,{gid}'
+
+`{gid}` is substituted with the box this alias is pinned to, in the path and in
+any query value. Use it: a raw query without it is account-wide, which is the
+one thing the named ops exist to avoid.
 
 The query syntax is Firewalla's own: `qualifier:value` terms separated by
 spaces, `-` to exclude, `*` to wildcard, `>` `<` `>=` `<=` and `n-m` for

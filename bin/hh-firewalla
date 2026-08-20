@@ -30,6 +30,16 @@
 # Treat any change that makes the method reachable from an argument as a change
 # to the security model, not a refactor.
 #
+# ONE ALIAS MEANS ONE BOX. An MSP token is scoped to an ACCOUNT, not to a box,
+# so every endpoint here would happily answer for every Firewalla the account can
+# see. That is the wrong answer for a registered alias: "my router" means one
+# box, and merging two sites into one undifferentiated table is worse than
+# useless because nothing in the output says which row came from where. So the
+# registry entry pins a box (GID=), every per-box op filters on it, and an entry
+# that is NOT pinned refuses to guess when the account has more than one box.
+# Only `boxes`, `ping`, and `stats` are deliberately account-wide, and each says
+# so where it matters.
+#
 # WHERE THIS TALKS TO. Firewalla has no supported local API on the box, so this
 # goes to the MSP cloud endpoint (https://<your-domain>.firewalla.net/v2/...),
 # which is a public host with a publicly trusted certificate. That is why there
@@ -67,7 +77,7 @@ CONF="${REG_DIR}/${ALIAS}.conf"
 # Parse the registry entry safely (no sourcing). Only known keys are accepted.
 # Split on the FIRST '=' by hand rather than with IFS='=', because a value is
 # allowed to contain one.
-HOST=""; PORT="443"; AUTH=""; CRED=""; PLATFORM=""
+HOST=""; PORT="443"; AUTH=""; CRED=""; PLATFORM=""; GID=""; BOX=""
 while IFS= read -r line || [ -n "$line" ]; do
   case "$line" in ''|\#*) continue ;; *=*) : ;; *) continue ;; esac
   key="${line%%=*}"; val="${line#*=}"
@@ -79,6 +89,8 @@ while IFS= read -r line || [ -n "$line" ]; do
     AUTH)     AUTH="$val" ;;
     CRED)     CRED="$val" ;;
     PLATFORM) PLATFORM="$val" ;;
+    GID)      GID="$val" ;;
+    BOX)      BOX="$val" ;;
   esac
 done < "$CONF"
 
@@ -205,6 +217,70 @@ _limit() {
   printf '%s' "$n"
 }
 
+# ---------------------------------------------------------------------------
+# Which box this alias means
+#
+# Rewrite one key in the registry entry, atomically and without needing write
+# permission on the file itself.
+#
+# The entry is written by `hh add-firewalla` as root (mode 644) but lives in a
+# directory owned by the vault user, so redirecting onto it fails: truncating a
+# file needs permission on the FILE, while replacing it needs permission on the
+# DIRECTORY, which is what we have. Hence a temp file in the SAME directory
+# followed by a rename - a same-filesystem rename(2) needs only that directory
+# write bit, and swaps the entry in one step so a concurrent reader never sees a
+# half-written registry.
+#
+# This is a cache, never a source of truth: if it cannot be written the lookup
+# simply happens again next time, so failure here is silent on purpose.
+_remember() {
+  local key="$1" val="$2" tmp
+  tmp="$(mktemp "${REG_DIR}/.${ALIAS}.XXXXXX" 2>/dev/null)" || return 0
+  {
+    grep -v "^${key}=" "$CONF" 2>/dev/null || true
+    printf '%s=%s\n' "$key" "$val"
+  } >"$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
+  chmod 644 "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$CONF" 2>/dev/null || rm -f "$tmp"
+  return 0
+}
+
+# The box this alias is pinned to. Normally it is already in the registry,
+# written by `hh add-firewalla`, and this costs nothing.
+#
+# An entry registered before pinning existed has no GID. With exactly one box on
+# the account there is no ambiguity, so resolve it and cache it back - that is
+# the upgrade path, and it is silent because nothing about the answer was ever
+# in doubt. With more than one, REFUSE. Picking the first box would be a guess,
+# and a guess that returns a plausible table from the wrong site is the exact
+# failure this pinning exists to prevent.
+_gid() {
+  if [ -z "$GID" ]; then
+    local j n
+    j="$(_get "${API}/boxes")"
+    _expect_array "$j" "${API}/boxes"
+    n="$(printf '%s' "$j" | jq -r 'length')"
+    case "$n" in
+      0) die "the token works, but this MSP account has no Firewalla boxes in it" ;;
+      1) GID="$(printf '%s' "$j" | jq -r '.[0].gid // empty')"
+         BOX="$(printf '%s' "$j" | jq -r '.[0].name // "?"')"
+         [ -n "$GID" ] || die "the MSP returned a box with no gid"
+         _remember GID "$GID"
+         _remember BOX "$BOX" ;;
+      *) die "'${ALIAS}' is not pinned to a box, and this MSP account has ${n} of them.
+    An MSP token sees the whole account, so every read here would merge all ${n}
+    boxes into one table with nothing to say which row came from which. Rather
+    than guess, this refuses. Re-register it and pick the box, from an admin
+    shell:
+        hh rm-host ${ALIAS}
+        hh add-firewalla
+    Boxes this token can see:
+$(printf '%s' "$j" | jq -r '.[] | "        \(.name // "?")  (\(.model // "?"))  \(.gid // "?")"')" ;;
+    esac
+  fi
+  printf '%s' "$GID"
+}
+
 _check_path() {
   local p="$1"
   case "$p" in
@@ -214,32 +290,59 @@ _check_path() {
   case "$p" in *..*) die "path may not contain '..'" ;; esac
 }
 
+# Expand {gid} in a caller-supplied path or query value, so the escape hatch is
+# usable without the caller having to know the box id.
+_expand() {
+  local v="$1" g
+  # Same reason as everywhere else: resolve first, substitute second, so an
+  # unpinned multi-box account refuses instead of expanding to nothing.
+  case "$v" in *'{gid}'*) g="$(_gid)"; v="${v//\{gid\}/$g}" ;; esac
+  printf '%s' "$v"
+}
+
 # ---------------------------------------------------------------------------
 # Ops
 
 op_info() { _get "${API}/boxes"; }
 
+# Reachability only, so this is deliberately account-wide and needs no pin: it
+# answers "does this token still work", which is the one question that must stay
+# answerable on an entry that is not pinned yet.
 op_ping() {
   local j n
   j="$(_get "${API}/boxes")"
   _expect_array "$j" "${API}/boxes"
   n="$(printf '%s' "$j" | jq -r 'length')"
   [ "$n" -gt 0 ] || die "the token works, but this MSP has no Firewalla boxes in it"
-  printf 'firewalla-ok %s (%s)\n' "$HOST" \
-    "$(printf '%s' "$j" | jq -r '[.[] | "\(.name // "?") \(.model // "?") v\(.version // "?") \(if .online then "online" else "OFFLINE" end)"] | join(", ")')"
+  if [ -n "$GID" ]; then
+    printf 'firewalla-ok %s (%s)\n' "$HOST" \
+      "$(printf '%s' "$j" | jq -r --arg g "$GID" '(.[] | select(.gid == $g) |
+         "\(.name // "?") \(.model // "?") v\(.version // "?") \(if .online then "online" else "OFFLINE" end)")
+         // "pinned box \($g) is NOT on this account any more"')"
+  else
+    printf 'firewalla-ok %s (%s)\n' "$HOST" \
+      "$(printf '%s' "$j" | jq -r '[.[] | "\(.name // "?") \(.model // "?") v\(.version // "?") \(if .online then "online" else "OFFLINE" end)"] | join(", ")')"
+  fi
 }
 
+# Every box the TOKEN can see, not just the pinned one - that is the point of
+# this op, and it is how a person finds the gid to pin. The last column says
+# which one this alias actually reads.
 op_boxes() {
   local j; j="$(_get "${API}/boxes")"
   _expect_array "$j" "${API}/boxes"
-  printf '%s' "$j" | jq -r '.[] |
-      "\(.name // "?")\t\(.model // "?")\t\(.mode // "-")\t\(.version // "-")\t\(if .online then "online" else "OFFLINE" end)\t\(.publicIP // "-")\t\(.deviceCount // 0)\t\(.ruleCount // 0)\t\(.alarmCount // 0)"' \
-    | awk -F'\t' 'BEGIN{printf "%-22s %-8s %-8s %-9s %-8s %-16s %6s %6s %6s\n","NAME","MODEL","MODE","VERSION","STATE","PUBLIC IP","DEVS","RULES","ALARMS"}
-                  {printf "%-22s %-8s %-8s %-9s %-8s %-16s %6s %6s %6s\n",$1,$2,$3,$4,$5,$6,$7,$8,$9}'
+  printf '%s' "$j" | jq -r --arg g "$GID" '.[] |
+      "\(.name // "?")\t\(.model // "?")\t\(.mode // "-")\t\(.version // "-")\t\(if .online then "online" else "OFFLINE" end)\t\(.publicIP // "-")\t\(.deviceCount // 0)\t\(.ruleCount // 0)\t\(.alarmCount // 0)\t\(if .gid == $g then "<- this alias" else "" end)"' \
+    | awk -F'\t' 'BEGIN{printf "%-22s %-8s %-8s %-9s %-8s %-16s %6s %6s %6s  %s\n","NAME","MODEL","MODE","VERSION","STATE","PUBLIC IP","DEVS","RULES","ALARMS",""}
+                  {printf "%-22s %-8s %-8s %-9s %-8s %-16s %6s %6s %6s  %s\n",$1,$2,$3,$4,$5,$6,$7,$8,$9,$10}'
+  [ -n "$GID" ] || printf '\n(this alias is not pinned to a box; see: hh firewalla devices %s)\n' "$ALIAS"
 }
 
 op_devices() {
-  local j; j="$(_get "${API}/devices")"
+  # Standalone assignment, never inline in the _get arguments: see the note on
+  # _gid. Inline, a refusal would be printed and then ignored.
+  local gid j; gid="$(_gid)"
+  j="$(_get "${API}/devices" "box=${gid}")"
   _expect_array "$j" "${API}/devices"
   printf '%s' "$j" | jq -r "${JQ_FMT}"'
     .[] | "\(.name // "?")\t\(.ip // "-")\t\(.id // "-")\t\(if .online then "online" else "OFFLINE" end)\t\(.network.name // "-")\t\(.group.name // "-")\t\(.lastSeen | when)\t\((.totalDownload // 0) | hb)\t\((.totalUpload // 0) | hb)"' \
@@ -254,8 +357,9 @@ op_devices() {
 # and not the MAC.
 op_device() {
   [ "$#" -ge 1 ] || die "usage: hh firewalla device [alias] <mac-or-name>"
-  local q="$1" j out
-  j="$(_get "${API}/devices")"
+  local q="$1" gid j out
+  gid="$(_gid)"
+  j="$(_get "${API}/devices" "box=${gid}")"
   _expect_array "$j" "${API}/devices"
   out="$(printf '%s' "$j" | jq --arg q "$q" '[ .[] |
     select((.id // "" | ascii_downcase) == ($q | ascii_downcase)
@@ -267,7 +371,8 @@ op_device() {
 
 op_alarms() {
   local n; n="$(_limit "${1:-}" 20)"
-  local j; j="$(_get "${API}/alarms" "query=status:active" "sortBy=ts:desc" "limit=${n}")"
+  local gid j; gid="$(_gid)"
+  j="$(_get "${API}/alarms" "query=status:active box.id:${gid}" "sortBy=ts:desc" "limit=${n}")"
   _expect_results "$j" "${API}/alarms"
   if [ "$(printf '%s' "$j" | jq -r '.results | length')" -eq 0 ]; then
     echo "No active alarms."
@@ -281,7 +386,8 @@ op_alarms() {
 
 op_flows() {
   local n; n="$(_limit "${1:-}" 20)"
-  local j; j="$(_get "${API}/flows" "sortBy=ts:desc" "limit=${n}")"
+  local gid j; gid="$(_gid)"
+  j="$(_get "${API}/flows" "query=box.id:${gid}" "sortBy=ts:desc" "limit=${n}")"
   _expect_results "$j" "${API}/flows"
   printf '%s' "$j" | jq -r "${JQ_FMT}"'
     .results[] | "\(.ts | when)\t\(.device.name // "-")\t\(if .block then "BLOCKED" else (.direction // "-") end)\t\(.protocol // "-")\t\(.destination.name // .destination.ip // "-")\t\(.category // "-")\t\((.download // 0) | hb)\t\((.upload // 0) | hb)"' \
@@ -295,7 +401,8 @@ op_bandwidth() {
   local n; n="$(_limit "${1:-}" 10)"
   local now begin
   now="$(date +%s)"; begin=$((now - 86400))
-  local j; j="$(_get "${API}/flows" "query=ts:${begin}-${now}" "groupBy=device" "sortBy=total:desc" "limit=${n}")"
+  local gid j; gid="$(_gid)"
+  j="$(_get "${API}/flows" "query=ts:${begin}-${now} box.id:${gid}" "groupBy=device" "sortBy=total:desc" "limit=${n}")"
   _expect_results "$j" "${API}/flows"
   echo "Top ${n} devices by traffic, last 24 hours:"
   printf '%s' "$j" | jq -r "${JQ_FMT}"'
@@ -305,7 +412,8 @@ op_bandwidth() {
 }
 
 op_rules() {
-  local j; j="$(_get "${API}/rules")"
+  local gid j; gid="$(_gid)"
+  j="$(_get "${API}/rules" "query=box.id:${gid}")"
   _expect_results "$j" "${API}/rules"
   printf '%s' "$j" | jq -r '
     .results[] | "\(.action // "-")\t\(.status // "-")\t\(.direction // "-")\t\(.target.type // "-"):\(.target.value // "-")\t\(.scope.type // "all"):\(.scope.value // "-")\t\((.notes // "") | gsub("\\s+"; " "))"' \
@@ -313,8 +421,12 @@ op_rules() {
                   {printf "%-8s %-8s %-12s %-34s %-26s %s\n",$1,$2,$3,$4,$5,$6}'
 }
 
+# Target lists have owners rather than a box filter: a list belongs either to
+# the MSP ("global", shared by every box) or to one box. Ask for both, so a
+# pinned alias shows the lists that actually apply to it and not another site's.
 op_lists() {
-  local j; j="$(_get "${API}/target-lists")"
+  local gid j; gid="$(_gid)"
+  j="$(_get "${API}/target-lists" "owner=global,${gid}")"
   _expect_array "$j" "${API}/target-lists"
   printf '%s' "$j" | jq -r "${JQ_FMT}"'
     .[] | "\(.name // "?")\t\(.id // "-")\t\(.owner // "-")\t\(.category // "-")\t\((.targets // []) | length)\t\(.lastUpdated | when)"' \
@@ -328,13 +440,23 @@ op_trends() {
     flows|alarms|rules) : ;;
     *) die "usage: hh firewalla trends [alias] <flows|alarms|rules>" ;;
   esac
+  # The trends endpoints filter by MSP GROUP, not by box, so on a multi-box
+  # account they cover the whole account by default however this alias is
+  # pinned. Reporting that as "your box" would be wrong, so say what it is.
+  # Putting a box in a group of its own is what makes these per-box: the group
+  # id then goes through the escape hatch, e.g.
+  #     hh firewalla get '/v2/trends/flows' 'group=<id>'
   local j; j="$(_get "${API}/trends/${what}")"
   _expect_array "$j" "${API}/trends/${what}"
   printf '%s' "$j" | jq -r "${JQ_FMT}"'
     sort_by(.ts) | .[] | "\(.ts | tonumber | floor | strflocaltime("%Y-%m-%d"))\t\(.value // 0)"' \
     | awk -F'\t' -v w="$what" 'BEGIN{printf "%-12s %s\n","DAY",toupper(w)} {printf "%-12s %s\n",$1,$2}'
+  echo "(account-wide: trends filter by MSP group, not by box. To get these for one"
+  echo " box, put it in an MSP group of its own, then: hh firewalla get '/v2/trends/${what}' 'group=<id>')"
 }
 
+# Account-wide by definition: every supported type RANKS boxes or regions
+# against each other, so scoping it to one box would leave nothing to rank.
 op_stats() {
   local what="${1:-}"
   case "$what" in
@@ -354,19 +476,27 @@ op_stats() {
 # substitution never runs. Every tolerated call below therefore puts its
 # fallback OUTSIDE the substitution, where it sees the real status.
 op_summary() {
-  local boxes dev alarms
+  local boxes gid dev alarms
 
   # Deliberately NOT tolerated: if MSP cannot be reached or the token is
   # refused, that is the answer, and it should be reported rather than papered
   # over with a header and a set of blank sections.
   boxes="$(_get "${API}/boxes")"
   _expect_array "$boxes" "${API}/boxes"
+  gid="$(_gid)"
   printf 'MSP       %s\n' "$HOST"
-  printf '%s' "$boxes" | jq -r '.[] |
-    "Box       \(.name // "?") (\(.model // "?"), \(.mode // "?" ) mode, v\(.version // "?"))   \(if .online then "online" else "OFFLINE" end)   public IP \(.publicIP // "?")"'
-  printf '%s' "$boxes" | jq -r '"Counts    \([.[] | .deviceCount // 0] | add // 0) devices, \([.[] | .ruleCount // 0] | add // 0) rules, \([.[] | .alarmCount // 0] | add // 0) alarms"'
+  # One box: the one this alias means. An account can hold several, and mixing
+  # a second site into this block is exactly the confusion pinning exists to
+  # remove - `hh firewalla boxes` is where the whole account is listed.
+  printf '%s' "$boxes" | jq -r --arg g "$gid" --arg a "$ALIAS" '(.[] | select(.gid == $g) |
+    "Box       \(.name // "?") (\(.model // "?"), \(.mode // "?" ) mode, v\(.version // "?"))   \(if .online then "online" else "OFFLINE" end)   public IP \(.publicIP // "?")",
+    "Counts    \(.deviceCount // 0) devices, \(.ruleCount // 0) rules, \(.alarmCount // 0) alarms")
+    // "Box       pinned box \($g) is NOT on this account any more - re-register: hh rm-host \($a) && hh add-firewalla"'
+  # Say when there are siblings, so a number that looks low is explainable
+  # without having to go and count boxes.
+  printf '%s' "$boxes" | jq -r 'if length > 1 then "Account   \(length) boxes on this MSP; this alias reads one of them (hh firewalla boxes)" else empty end'
 
-  dev="$(_get "${API}/devices" 2>/dev/null)" || dev=""
+  dev="$(_get "${API}/devices" "box=${gid}" 2>/dev/null)" || dev=""
   if printf '%s' "$dev" | jq -e 'type == "array"' >/dev/null 2>&1; then
     printf '%s' "$dev" | jq -r '"Devices   \(length) known, \([.[] | select(.online)] | length) online"'
     # An offline device that used to be online is the single most common thing a
@@ -375,7 +505,7 @@ op_summary() {
       if length > 0 then "Offline   \(length): \(.[0:8] | join(", "))\(if length > 8 then ", ..." else "" end)" else empty end'
   fi
 
-  alarms="$(_get "${API}/alarms" "query=status:active" "sortBy=ts:desc" "limit=5" 2>/dev/null)" || alarms=""
+  alarms="$(_get "${API}/alarms" "query=status:active box.id:${gid}" "sortBy=ts:desc" "limit=5" 2>/dev/null)" || alarms=""
   if printf '%s' "$alarms" | jq -e 'has("results")' >/dev/null 2>&1; then
     printf '%s' "$alarms" | jq -r "${JQ_FMT}"'
       if (.results | length) == 0 then "Alarms    none active"
@@ -388,10 +518,14 @@ op_summary() {
 # without this broker having to grow an op per endpoint, and without giving up
 # the read-only guarantee, since it can still only issue a GET.
 op_get() {
-  [ "$#" -ge 1 ] || die "usage: hh firewalla get [alias] </v2/...> [name=value ...]"
-  local p="$1"; shift
+  [ "$#" -ge 1 ] || die "usage: hh firewalla get [alias] </v2/...> [name=value ...]   ({gid} is expanded)"
+  local p; p="$(_expand "$1")"; shift
   _check_path "$p"
-  _get "$p" "$@"
+  # Expand {gid} in query values too, which is where it is actually wanted:
+  # 'query=box.id:{gid}' is how an ad-hoc query scopes itself to this alias.
+  local args=() kv e
+  for kv in "$@"; do e="$(_expand "$kv")"; args+=("$e"); done
+  _get "$p" ${args[@]+"${args[@]}"}
 }
 
 audit "$OP $*"

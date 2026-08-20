@@ -24,6 +24,60 @@ easy to get wrong and changes if a date is added to the heading.
 When adding a version, keep the three in sync: the anchor (`v1-1-0`), the git
 tag (`v1.1.0`), and `HH_VERSION` in `bin/hh` (`1.1.0`).
 
+<a id="v1-3-1"></a>
+
+## 1.3.1 (2026-08-21)
+
+Firewalla aliases now mean one box.
+
+### Fixed
+
+- A Firewalla alias is pinned to a single box, and every per-box read is
+  filtered to it. An MSP personal access token is scoped to an ACCOUNT, not to
+  a box, and 1.3.0 filtered by nothing at all: on an account with more than one
+  Firewalla, `devices`, `alarms`, `flows`, `bandwidth`, `rules`, `lists`, and
+  `summary` returned every box's data merged into one table, with no column
+  saying which row came from where. A device at another site appeared under an
+  alias its owner would reasonably read as "my router". On a single-box account
+  none of this was visible.
+
+  `hh add-firewalla` now resolves the boxes the token can see and, when there is
+  more than one, asks which the alias means, storing it as `GID=` in the
+  registry entry. Registering a second box is another `hh add-firewalla` run
+  with the same token and a different alias, and `hh firewalla <op> <alias>`
+  picks between them. To change which box an alias reads:
+  `hh rm-host <alias> && hh add-firewalla`.
+
+  An entry registered under 1.3.0 has no pin. On a single-box account the broker
+  resolves it on first use and caches it back, silently, because nothing about
+  the answer was ever in doubt. On a multi-box account the per-box ops REFUSE
+  and name the boxes to choose from, rather than guessing: a plausible table
+  from the wrong site is worse than no table.
+
+  Three ops stay account-wide on purpose and say so where it matters: `boxes`
+  (which is how you find the other boxes, and which now marks the one an alias
+  reads), `ping` (a connectivity check, which has to work before a pin exists),
+  and `stats` (every supported type ranks boxes against each other).
+
+  Reported, diagnosed, and tested against a live two-box account by @lesterktm.
+
+### Changed
+
+- `hh firewalla trends` says that it is account-wide. The trends endpoints
+  filter by MSP group rather than by box, so the box pin cannot narrow them;
+  rather than let an account-wide number pass as one box's, the output names the
+  limit and points at the fix - put the box in an MSP group of its own, then
+  read that group with `hh firewalla get '/v2/trends/flows' 'group=<id>'`. The
+  README and the capability catalog say the same. Per-box numbers obtained this
+  way sum back to the account-wide total (confirmed live by @lesterktm).
+
+- The raw escape hatch expands `{gid}` in the path and in query values, so an
+  ad-hoc query can scope itself the way the named ops do:
+  `hh firewalla get '/v2/flows' 'query=box.id:{gid} total:>50MB'`.
+
+- `hh repin` on a Firewalla explains that there is no TLS pin to refresh and
+  points at re-registration if what was meant was changing the box.
+
 <a id="v1-3-0"></a>
 
 ## 1.3.0 (2026-08-20)
