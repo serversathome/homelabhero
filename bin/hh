@@ -9,7 +9,7 @@
 #
 set -euo pipefail
 
-HH_VERSION="1.3.0"
+HH_VERSION="1.3.1"
 REG_DIR="/etc/homelabhero/hosts.d"
 VAULT_DIR="/etc/homelabhero/vault"
 VAULT_USER="hhvault"
@@ -786,6 +786,10 @@ token:
   is never shown to Claude. If you would rather not hold one at all, that is a
   reasonable choice: skip this and keep reading your Firewalla in its own app.
 
+  A token sees every box on your MSP account, but an alias means exactly ONE
+  box, so if there is more than one you will be asked which. Run this again with
+  the same token to register another.
+
 EOF
   token="$(asksecret "Firewalla MSP personal access token for ${host}")"
   [ -n "$token" ] || die "no token entered"
@@ -809,6 +813,7 @@ EOF
 
   echo >/dev/tty; echo "Registered '${alias}'. Testing..." >/dev/tty
   if cmd_test "$alias"; then
+    _pin_firewalla_box "$alias"
     echo >/dev/tty
     firewalla_broker summary "$alias" 2>&1 | sed 's/^/  /' >/dev/tty || true
   else
@@ -822,6 +827,54 @@ domain (yourname.firewalla.net), not the box's LAN address, then replace it:
     hh add-firewalla
 EOF
   fi
+}
+
+# Pin the alias to ONE box.
+#
+# An MSP token is scoped to an account, not to a box, so without this an alias
+# on a two-box account reads both at once and says nothing about which row came
+# from where. One box is the overwhelmingly common case and needs no question
+# asked; more than one is a real choice and only the operator can make it.
+#
+# Failing here is not fatal: the registration still works, and the broker
+# resolves a single-box account by itself on first use. It only refuses to guess
+# when the account genuinely has several.
+_pin_firewalla_box() {
+  local alias="$1" boxes n gid bname pick
+  echo >/dev/tty; echo "Checking which Firewalla boxes this token can see..." >/dev/tty
+  if ! boxes="$(firewalla_broker info "$alias" 2>/dev/null)" \
+     || ! printf '%s' "$boxes" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    echo "  (could not read the box list; the broker will resolve it on first use)" >/dev/tty
+    return 0
+  fi
+  n="$(printf '%s' "$boxes" | jq -r 'length')"
+  case "$n" in
+    0) echo "  This MSP account has no Firewalla boxes in it." >/dev/tty; return 0 ;;
+    1) gid="$(printf '%s' "$boxes" | jq -r '.[0].gid // empty')"
+       bname="$(printf '%s' "$boxes" | jq -r '.[0].name // "?"')"
+       echo "  One box on this account: ${bname}" >/dev/tty ;;
+    *) cat >/dev/tty <<EOF
+
+  This token can see ${n} Firewalla boxes. An alias reads exactly one of them,
+  so pick which one '${alias}' means. (Register the others as their own aliases
+  with another 'hh add-firewalla' run, using the same token.)
+
+EOF
+       printf '%s' "$boxes" | jq -r 'to_entries[] | "  \(.key + 1)) \(.value.name // "?")  (\(.value.model // "?"), \(if .value.online then "online" else "OFFLINE" end))  \(.value.gid // "?")"' >/dev/tty
+       echo >/dev/tty
+       while :; do
+         pick="$(ask "Which box is '${alias}'? (1-${n})" 1)"
+         [[ "$pick" =~ ^[0-9]+$ ]] && [ "$pick" -ge 1 ] && [ "$pick" -le "$n" ] && break
+         echo "  Enter a number between 1 and ${n}." >/dev/tty
+       done
+       gid="$(printf '%s' "$boxes" | jq -r --argjson i "$((pick-1))" '.[$i].gid // empty')"
+       bname="$(printf '%s' "$boxes" | jq -r --argjson i "$((pick-1))" '.[$i].name // "?"')"
+       echo "  '${alias}' now means: ${bname}" >/dev/tty ;;
+  esac
+  [ -n "$gid" ] || { echo "  (the MSP returned no box id; skipping the pin)" >/dev/tty; return 0; }
+  # The broker reads these; BOX is only ever for display.
+  sudo sed -i '/^GID=/d;/^BOX=/d' "${REG_DIR}/${alias}.conf"
+  printf 'GID=%s\nBOX=%s\n' "$gid" "$bname" | sudo tee -a "${REG_DIR}/${alias}.conf" >/dev/null
 }
 
 cmd_add_firewalla() {
@@ -842,9 +895,16 @@ cmd_repin() {
   [ "$#" -eq 1 ] || die "usage: hh repin <alias>"
   local alias="$1" f="${REG_DIR}/$1.conf"
   [ -f "$f" ] || die "no such host"
-  _is_unifi "$alias" || die "'${alias}' is not a UniFi console. Only a UniFi console is
-    TLS-pinned, because only it presents a self-signed certificate; a Firewalla
-    MSP host has a publicly trusted one and has no pin to refresh."
+  if ! _is_unifi "$alias"; then
+    if _is_firewalla "$alias"; then
+      die "'${alias}' is a Firewalla, which has no TLS pin to refresh: it is reached at
+    an MSP domain with a publicly trusted certificate. If you meant to change
+    WHICH BOX this alias reads, re-register it and pick again:
+        hh rm-host ${alias} && hh add-firewalla"
+    fi
+    die "'${alias}' is not a UniFi console. Only a UniFi console is TLS-pinned,
+    because only it presents a self-signed certificate."
+  fi
   [ "$(id -u)" -eq 0 ] || sudo -v || die "repin needs sudo (run from an admin shell, not the Claude UI)"
   local host port pin
   host="$(conf_get "$f" HOST)"; port="$(conf_get "$f" PORT)"

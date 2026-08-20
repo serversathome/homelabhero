@@ -266,6 +266,23 @@ internet, at `https://<yourname>.firewalla.net`. You need an MSP account, and
 when your internet is down this is down with it, so it is a poor first probe for
 "is the internet up" and a good one for everything else.
 
+**One alias is one box.** An MSP token is scoped to your account, not to a box,
+so `hh add-firewalla` asks which Firewalla the alias means when the token can
+see more than one, and every read is filtered to it. Two sites means two
+aliases, registered with the same token, and `hh firewalla devices cabin` says
+which you want. `hh firewalla boxes` lists them all and marks the one an alias
+reads. To change which box an alias means: `hh rm-host <alias> && hh add-firewalla`.
+
+One read stays account-wide even so: `hh firewalla trends` filters by MSP
+*group* rather than by box, and its output says as much rather than passing an
+account-wide number off as one box's. If you want per-box trends, put the box in
+an MSP group of its own and read that group directly:
+
+    hh firewalla get '/v2/trends/flows' 'group=<group-id>'
+
+Per-box numbers obtained that way sum back to the account-wide total. (Thanks to
+@lesterktm for testing this on a live multi-box account.)
+
 **It can only read. It cannot change anything on your network.** Note that here
 that rests on *one* lock rather than UniFi's two:
 
