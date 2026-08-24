@@ -3,7 +3,7 @@ name: backup-restore
 description: >
   Understand and operate the homelab's snapshots and backups: how they work on
   each platform and how to take, list, verify, and restore/roll back safely. Use
-  this whenever Evan asks to snapshot, back up, restore, roll back, or recover a
+  this whenever the user asks to snapshot, back up, restore, roll back, or recover a
   VM, LXC, dataset, pool, config, or app; asks "can I undo this", "is there a
   backup", "how do snapshots work here", or "are the backups current"; or right
   before you propose a risky/destructive change and want to offer a snapshot as a

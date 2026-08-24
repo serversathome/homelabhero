@@ -1,7 +1,7 @@
 ---
 name: proxmox-ops
 description: >
-  Troubleshoot and manage Proxmox VE over SSH. Use this whenever Evan mentions
+  Troubleshoot and manage Proxmox VE over SSH. Use this whenever the user mentions
   Proxmox, PVE, a VM or LXC container, a hypervisor node, "qm", "pct", cluster
   quorum, HA, migration, a VM that won't boot or is stuck, a node running hot or
   unreachable, VM/container backups (vzdump), or Proxmox storage. Trigger this

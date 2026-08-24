@@ -3,7 +3,7 @@ name: truenas-middleware
 description: >
   Discover and use the live TrueNAS middleware method surface instead of
   guessing. Use this whenever a TrueNAS task needs a midclt method that is not
-  in capabilities/truenas.md, whenever Evan asks about the TrueNAS API, the
+  in capabilities/truenas.md, whenever the user asks about the TrueNAS API, the
   middleware, midclt, "what can the API do", available methods, or method
   parameters, or whenever a midclt call fails with an unknown-method or bad-
   argument error. Trigger this to look up the real methods, their exact names,
@@ -53,7 +53,7 @@ the names are still shifting - trust the live list, not memory.
 ## Inspect a method BEFORE you call it
 
 For any state-changing method, look up its accepts schema so you pass the right
-arguments, then confirm with Evan before running it.
+arguments, then confirm with the user before running it.
 
     # description + accepted arguments + return shape for one method
     midclt call core.get_methods | python3 -c "import json,sys,pprint;pprint.pprint(json.load(sys.stdin).get('pool.dataset.create'))"

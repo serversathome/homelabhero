@@ -3,7 +3,7 @@ name: unifi-ops
 description: >
   Read and analyze the UniFi router/console: WAN and internet health, adopted
   access points and switches, connected clients, VLANs and networks, firmware
-  status. Use this whenever Evan asks about the router, the gateway, the
+  status. Use this whenever the user asks about the router, the gateway, the
   internet connection, WiFi, an access point, a UniFi switch, what is connected
   to the network, who is using bandwidth, a VLAN, or the ISP, and whenever a
   problem might be upstream of a host rather than on it ("the internet is
@@ -38,9 +38,9 @@ override. It is the point of the integration.
 - Do not try to route around this. Do not look for another path to the router:
   not SSH to the gateway, not the UniFi mobile app, not `curl` against the API
   yourself, not a script that "just" restarts one access point. If you catch
-  yourself planning any of that, stop. The answer is to tell Evan what to
+  yourself planning any of that, stop. The answer is to tell the user what to
   change, not to change it.
-- If Evan asks you to change a UniFi setting, do not refuse flatly and do not
+- If the user asks you to change a UniFi setting, do not refuse flatly and do not
   quietly do nothing. Say that HomelabHero's UniFi access is read-only on
   purpose, then give him the exact steps to do it himself in the UniFi app:
   which screen, which setting, which value, and what he should expect to see
@@ -50,7 +50,7 @@ override. It is the point of the integration.
 Why it is built this way: the router is the one device whose failure takes away
 the access you would need to fix it. A bad firewall rule, a mistaken VLAN
 change, or an ill-timed reboot can cut off every host, the command center, and
-Evan's own way in, all at once, with no way back except physically standing in
+your own way in, all at once, with no way back except physically standing in
 front of the hardware. Nothing an agent could usefully automate here is worth
 that risk. So the router is treated as a source of truth to read and reason
 about, and changes stay with the person.
@@ -93,7 +93,7 @@ reach for the latter when it is the only source.
   plausible. No IP means the connection to the ISP is down, which is upstream
   of everything and not something in the homelab to fix.
 - **Internet (www)** not ok: the link is up but quality is poor. Latency and
-  throughput numbers are in the same line; compare them against what Evan pays
+  throughput numbers are in the same line; compare them against what the user pays
   for before calling it a fault.
 - **LAN** not ok: usually a switch offline or a port down. Cross-check with
   `hh unifi devices` for anything not `ONLINE`.

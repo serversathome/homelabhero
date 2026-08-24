@@ -2,7 +2,7 @@
 name: deploy-app
 description: >
   Stand up a NEW containerized app or compose stack on a docker host. Use
-  whenever Evan wants to deploy, install, add, spin up, or "set up" a new
+  whenever the user wants to deploy, install, add, spin up, or "set up" a new
   container or stack (Jellyfin, Radarr, Sonarr, qBittorrent, Immich, a new arr
   app, a dashboard, etc.), or add a service to an existing stack. For fixing or
   operating an app that already exists, use docker-stack-ops instead; for
@@ -93,7 +93,7 @@ in docker-stack-ops).
 2. Create the config dir/dataset with the right owner and `770` (on TrueNAS,
    create the dataset in the UI or `mkdir` under the configs dataset).
 3. Add the service block (single file) or create the stack dir (Dockge/Portainer).
-   Show Evan the compose and confirm before applying.
+   Show the user the compose and confirm before applying.
 4. Bring it up (state-changing):
 
        hh run <dockerhost> "cd <composedir> && docker compose up -d <service>"

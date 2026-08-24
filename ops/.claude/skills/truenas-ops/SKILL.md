@@ -1,7 +1,7 @@
 ---
 name: truenas-ops
 description: >
-  Troubleshoot and manage TrueNAS SCALE over SSH. Use this whenever Evan
+  Troubleshoot and manage TrueNAS SCALE over SSH. Use this whenever the user
   mentions TrueNAS, the NAS, ZFS, a pool or dataset, a scrub, a snapshot,
   replication, a failing or degraded disk, SMART data, an SMB/NFS/iSCSI share, a
   TrueNAS app, or storage that is full, slow, or throwing errors. Trigger this

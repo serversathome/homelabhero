@@ -3,7 +3,7 @@ name: add-server
 description: >
   Register a new server so HomelabHero can manage it, driven entirely from the
   chat/UI with no shell access and no password ever entering the conversation.
-  Use this whenever Evan (or a user) asks to add, register, connect, onboard, or
+  Use this whenever the user asks to add, register, connect, onboard, or
   "hook up" a server, host, machine, NAS, node, or box, or says things like "add
   my truenas", "connect to my proxmox at 10.x.x.x", or "I have another Linux box
   to manage". Trigger it any time someone wants a new machine brought under
