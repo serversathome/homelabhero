@@ -72,12 +72,12 @@ tag (`v1.1.0`), and `HH_VERSION` in `bin/hh` (`1.1.0`).
 
 ### Changed
 
-- The shipped skills no longer hardcode the maintainer's first name. Their
-  descriptions said "whenever Evan asks ...", which was wrong for every user who
-  is not Evan and made personalising 15 files the single most common reason to
-  edit a shipped file at all - the top casualty of the bug above. They now say
-  "the user", which reads correctly for everybody and triggers no worse. If you
-  want Claude to use your name, say so in `CLAUDE.local.md`.
+- The shipped skills no longer hardcode a personal name. Their descriptions
+  named one specific person, which was wrong for everyone else and made
+  personalising 15 files the single most common reason to edit a shipped file
+  at all - the top casualty of the bug above. They now say "the user", which
+  reads correctly for everybody and triggers no worse. If you want Claude to
+  use your name, say so in `CLAUDE.local.md`.
 
 <a id="v1-3-1"></a>
 
