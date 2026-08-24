@@ -13,6 +13,9 @@ VAULT_USER="hhvault"
 CFG_DIR="/etc/homelabhero"
 VAULT_DIR="${CFG_DIR}/vault"
 REG_DIR="${CFG_DIR}/hosts.d"
+# Pristine copy of the ops files HomelabHero owns, as last shipped. It is what
+# makes an update able to tell "the user edited this" from "this is simply old".
+SHIPPED_DIR="${CFG_DIR}/shipped"
 NODE_LTS_MIN=22
 # Non-interactive mode. `hh update` re-runs this installer headless (weekly via
 # cron and on demand) with HH_NONINTERACTIVE=1, which skips only the two
@@ -198,18 +201,114 @@ rm -f "$TMP_SUDO"
 say "6/10  Ops brain -> ${AGENT_HOME}/homelab-ops"
 OPS_DST="${AGENT_HOME}/homelab-ops"
 sudo -u "$AGENT_USER" mkdir -p "$OPS_DST"
-# Ownership split so a re-run (this is how `hh update` self-updates) DELIVERS shipped
-# updates without clobbering the user's own notes:
-#   * HomelabHero-owned, overwritten by content (--checksum catches a same-size
-#     edit): the skills, settings.json, capability docs, and CLAUDE.md. No
-#     --delete, so a user's OWN custom skill under .claude/skills/ survives.
-#   * User-owned, add-only: everything else (infra/, inventory/, runbooks/,
-#     hosts/) - new stubs are added, existing notes never overwritten.
-$SUDO rsync -a --checksum "${REPO_ROOT}/ops/.claude/"      "${OPS_DST}/.claude/"
-$SUDO rsync -a --checksum "${REPO_ROOT}/ops/capabilities/" "${OPS_DST}/capabilities/"
-$SUDO install -m 644 "${REPO_ROOT}/ops/CLAUDE.md" "${OPS_DST}/CLAUDE.md"
+$SUDO install -d -o root -g root -m 755 "$SHIPPED_DIR"
+
+# Two halves to the ops tree, and `hh update` re-runs this installer weekly, so
+# what happens here to an edited file happens every week.
+#
+#   * User-owned, add-only: infra/, inventory/, runbooks/, hosts/. New stubs are
+#     added, existing notes are never touched. Unchanged.
+#   * HomelabHero-owned: the skills, settings.json, capability docs, CLAUDE.md.
+#     These have to keep receiving updates - that is how a skill improves - but
+#     they are also the files the docs invite you to make your own.
+#
+# That second half used to be restored from the shipped copy unconditionally, so
+# a renamed operator in a skill description, an environment note added to a
+# capability doc, or a paragraph appended to CLAUDE.md was thrown away on the
+# next cron run. Silently: no output, no backup, nothing to recover from.
+#
+# So keep a pristine copy of what was last shipped and compare three ways, the
+# way dpkg handles a conffile. See sync_shipped below.
+STAMP="$(date +%Y%m%d-%H%M%S)"
+SYNC_UPDATED=(); SYNC_KEPT=(); SYNC_BACKED=()
+
+# Deliver one shipped file, without ever destroying a local edit:
+#
+#   live missing        -> install it (fresh install, or a newly shipped file)
+#   live == new         -> already current, nothing to do
+#   live == pristine    -> the user never touched it; deliver the update
+#   new  == pristine    -> the user edited it and upstream did NOT change;
+#                          leave it alone and say nothing (this is the steady
+#                          state for a personalised file, and it must be quiet)
+#   all three differ    -> the user edited it AND upstream changed. KEEP the
+#                          user's file, drop the new one beside it as
+#                          <file>.upstream, and report it. Never merge blind.
+#
+# With no pristine copy yet - the first run after this change lands - an edit is
+# indistinguishable from an old version, so the update still goes in, but the
+# previous file is backed up to <file>.bak-<stamp> first. That way even the
+# one-time bootstrap run loses nothing, and every run after it preserves in
+# place instead of backing up.
+sync_shipped() {
+  # Declared separately on purpose: `local a=$1 b=${a}` expands every word
+  # BEFORE the builtin assigns any of them, so a later one cannot reference an
+  # earlier one - under `set -u` that is an unbound-variable abort, not a subtle
+  # bug, and it takes the whole install with it.
+  local src="$1" rel="$2"
+  local live="${OPS_DST}/${rel}"
+  local old="${SHIPPED_DIR}/${rel}"
+  $SUDO install -d -m 755 "$(dirname "$live")"
+  if ! $SUDO test -e "$live"; then
+    $SUDO install -m 644 "$src" "$live"
+  elif $SUDO cmp -s "$src" "$live"; then
+    :
+  elif $SUDO test -e "$old" && $SUDO cmp -s "$old" "$live"; then
+    $SUDO install -m 644 "$src" "$live"; SYNC_UPDATED+=("$rel")
+  elif $SUDO test -e "$old" && $SUDO cmp -s "$old" "$src"; then
+    :
+  elif $SUDO test -e "$old"; then
+    $SUDO install -m 644 "$src" "${live}.upstream"; SYNC_KEPT+=("$rel")
+  else
+    $SUDO cp -p "$live" "${live}.bak-${STAMP}"
+    $SUDO install -m 644 "$src" "$live"; SYNC_BACKED+=("$rel")
+  fi
+  # The pristine copy always tracks what was SHIPPED, whatever happened to the
+  # live file. Getting this wrong (only recording it when the file was written)
+  # would compare next week's edit against an ancient version and report a
+  # conflict for a change the user already resolved.
+  $SUDO install -D -m 644 "$src" "$old"
+}
+
+while IFS= read -r f; do
+  sync_shipped "$f" "${f#"${REPO_ROOT}/ops/"}"
+done < <(find "${REPO_ROOT}/ops/.claude" "${REPO_ROOT}/ops/capabilities" -type f | sort)
+sync_shipped "${REPO_ROOT}/ops/CLAUDE.md" "CLAUDE.md"
+
+# Everything else: add-only, exactly as before.
 $SUDO rsync -a --ignore-existing "${REPO_ROOT}/ops/" "${OPS_DST}/"
+# The supported place for local additions to the ops brain. CLAUDE.md imports it
+# and this installer never overwrites it, so anything here survives every update
+# by construction rather than by luck.
+if ! $SUDO test -e "${OPS_DST}/CLAUDE.local.md"; then
+  $SUDO tee "${OPS_DST}/CLAUDE.local.md" >/dev/null <<'LOCALMD'
+# Local notes
+
+Yours. HomelabHero never overwrites this file, and `CLAUDE.md` imports it, so
+anything here is loaded on every session and survives every update.
+
+Good things to put here:
+
+- Who you are, if you want Claude to use your name: "The operator is <name>."
+- House rules that differ from the shipped ones.
+- Pointers to your own docs, dashboards, or runbooks.
+- Anything you would otherwise be tempted to edit into CLAUDE.md itself.
+LOCALMD
+fi
 $SUDO chown -R "$AGENT_USER:$AGENT_USER" "$OPS_DST"
+
+# Say what happened. An update that quietly declines to update something is only
+# better than one that quietly overwrites it if the user is told.
+if [ "${#SYNC_BACKED[@]}" -gt 0 ]; then
+  warn "First run under the new update rules. These files differed from the shipped"
+  warn "version, so they were updated and the previous copy kept as .bak-${STAMP}:"
+  for f in "${SYNC_BACKED[@]}"; do printf '         %s\n' "$f"; done
+  warn "From now on local edits are preserved in place instead."
+fi
+if [ "${#SYNC_KEPT[@]}" -gt 0 ]; then
+  warn "You have edited these files, and a newer version shipped. YOUR copy was kept."
+  warn "The new version is beside it as <file>.upstream - merge what you want:"
+  for f in "${SYNC_KEPT[@]}"; do printf '         %s\n' "$f"; done
+fi
 sudo -u "$AGENT_USER" -H bash -lc "cd ~/homelab-ops && [ -d .git ] || (git init -q && git add -A && git -c user.name='HomelabHero' -c user.email='homelabhero@localhost' commit -q -m 'HomelabHero scaffold')" || true
 
 # The low-privilege agent user must be able to READ its ops brain. On TrueNAS/ZFS

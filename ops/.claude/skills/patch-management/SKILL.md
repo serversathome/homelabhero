@@ -2,7 +2,7 @@
 name: patch-management
 description: >
   Update and patch the managed hosts and their containers safely. Use whenever
-  Evan asks to update, upgrade, or patch a host, VM, node, or app; asks "are we
+  the user asks to update, upgrade, or patch a host, VM, node, or app; asks "are we
   patched", "any updates", "update proxmox/truenas/ubuntu", "update my
   containers", or wants to apply pending OS or image updates. Covers Debian/Ubuntu
   hosts, Proxmox, TrueNAS, and Docker containers. Diagnose what's pending first,
@@ -48,7 +48,7 @@ major upgrade.
 
 TrueNAS is an appliance - do NOT `apt upgrade` it. Updates are train-based and are
 safest applied from the web UI. Check availability over SSH, but hand the actual
-apply to the UI unless Evan asks otherwise (it reboots and manages the boot
+apply to the UI unless the user asks otherwise (it reboots and manages the boot
 environment for rollback).
 
     hh run truenas "midclt call update.check_available"   # is an update staged? (midclt needs no sudo)
@@ -74,5 +74,5 @@ the TrueNAS UI, not here.
 ## After
 
 Confirm the host/containers are healthy (`hh overview`, `hh test <alias>`, or the
-app's own check). If a reboot is pending, say so and let Evan choose the window.
+app's own check). If a reboot is pending, say so and let the user choose the window.
 If an update broke something, that's a runbook entry (symptom, cause, fix).

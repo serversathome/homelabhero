@@ -17,6 +17,9 @@ export DEBIAN_FRONTEND=noninteractive
 
 CFG_DIR="/etc/homelabhero"
 INSTALL_CONF="${CFG_DIR}/install.conf"
+# Pristine copy of the ops files HomelabHero ships, as last delivered. The
+# installer owns it; this script only ever seeds it (see self_update).
+SHIPPED_DIR="${CFG_DIR}/shipped"
 
 echo "=================================================="
 echo "HomelabHero update starting: $(date '+%Y-%m-%d %H:%M:%S %Z')"
@@ -63,6 +66,29 @@ self_update() {
     echo "--- updated ${old:0:7} -> ${new:0:7}; re-running the installer to apply it"
   fi
   [ -f "$checkout/setup/main.sh" ] || { echo "--- installer not found at ${checkout}/setup/main.sh; skipping self-update"; return 0; }
+
+  # Seed the pristine copy of the shipped ops files, if this box has never had
+  # one. The installer compares the live ops brain against it to tell "the user
+  # edited this" from "this is simply the old version" - and without a seed it
+  # cannot tell, so it falls back to updating and leaving a .bak of everything
+  # that differs. That is lossless but noisy: on a release that touches every
+  # skill, every box gets a backup of every skill it never edited.
+  #
+  # We can do better here, because right now we know something the installer
+  # does not: ${old} is the revision this box was actually running. Exporting
+  # its ops tree gives an exact baseline, so an untouched file compares equal
+  # and takes the update silently, and only genuinely edited files are flagged.
+  if [ ! -d "$SHIPPED_DIR" ] && [ -n "${old:-}" ] && [ "$old" != none ]; then
+    if mkdir -p "$SHIPPED_DIR" && git -C "$checkout" archive "$old" ops 2>/dev/null \
+         | tar -x --strip-components=1 -C "$SHIPPED_DIR" 2>/dev/null; then
+      echo "--- seeded the shipped-file baseline from ${old:0:7} (your local edits will be preserved)"
+    else
+      # Not fatal: the installer falls back to backing up whatever differs.
+      rmdir "$SHIPPED_DIR" 2>/dev/null || true
+      echo "--- could not seed the shipped-file baseline; the installer will back up any file it replaces"
+    fi
+  fi
+
   HH_NONINTERACTIVE=1 bash "$checkout/setup/main.sh" || echo "--- installer reported an issue (continuing)"
 }
 

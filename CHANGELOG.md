@@ -24,6 +24,61 @@ easy to get wrong and changes if a date is added to the heading.
 When adding a version, keep the three in sync: the anchor (`v1-1-0`), the git
 tag (`v1.1.0`), and `HH_VERSION` in `bin/hh` (`1.1.0`).
 
+<a id="v1-3-2"></a>
+
+## 1.3.2 (2026-08-24)
+
+`hh update` no longer throws away your edits to the files it ships.
+
+### Fixed
+
+- Local edits to shipped files survive an update. The installer restored
+  `.claude/` (every skill and `settings.json`), `capabilities/`, and `CLAUDE.md`
+  from the shipped copy unconditionally on every run, and `hh update` re-runs
+  the installer weekly by cron - so a renamed operator in a skill description,
+  an environment note added to a capability doc, or a paragraph appended to
+  `CLAUDE.md` was reverted, with no warning, no log line, and no backup. The
+  only way to notice was to keep the ops brain in git and diff after every
+  update.
+
+  HomelabHero now keeps a pristine copy of what it last delivered, in
+  `/etc/homelabhero/shipped/`, and compares three ways on each update, the way
+  dpkg handles a config file: an untouched file takes the update silently; a
+  file you edited where nothing new shipped is left alone silently; and a file
+  you edited where a new version DID ship keeps your copy, writes the new one
+  beside it as `<file>.upstream`, and names it in the update output. Nothing is
+  overwritten without saying so, and nothing is deleted.
+
+  On the first update after this change there is no pristine copy yet, so an
+  edit cannot be told from an old version: that run still applies the update,
+  but saves the previous file as `<file>.bak-<timestamp>` first, so even the
+  one-time bootstrap loses nothing. Every run after it preserves in place.
+
+  Reported by @bnaert, who lost work to this three times before identifying the
+  cause.
+
+### Added
+
+- `CLAUDE.local.md`, a supported local layer for the ops brain. `CLAUDE.md`
+  imports it and the installer never touches it, so anything in it survives
+  every update by construction rather than by merge. It is the right home for
+  your name, your house rules, and pointers to your own docs. Created empty on
+  install if absent.
+
+- `hh doctor` reports the ops brain: how many shipped files have local edits,
+  whether any `.upstream` versions are waiting to be merged, and whether
+  `CLAUDE.local.md` exists. Preserving an edit is only trustworthy if you can
+  see that it happened without going through git history.
+
+### Changed
+
+- The shipped skills no longer hardcode the maintainer's first name. Their
+  descriptions said "whenever Evan asks ...", which was wrong for every user who
+  is not Evan and made personalising 15 files the single most common reason to
+  edit a shipped file at all - the top casualty of the bug above. They now say
+  "the user", which reads correctly for everybody and triggers no worse. If you
+  want Claude to use your name, say so in `CLAUDE.local.md`.
+
 <a id="v1-3-1"></a>
 
 ## 1.3.1 (2026-08-21)

@@ -4,7 +4,7 @@ description: >
   Read and analyze the Firewalla router through the MSP API: box and firmware
   state, devices on the network and which are offline, active alarms, traffic
   flows and top bandwidth consumers, rules and target lists. Use this whenever
-  Evan asks about the Firewalla, the router, the gateway, what is connected to
+  the user asks about the Firewalla, the router, the gateway, what is connected to
   the network, who is using bandwidth, whether a device is online, a security
   alarm, a block rule, or whether something is being blocked, and whenever a
   problem might be upstream of a host rather than on it ("is my printer on the
@@ -27,7 +27,7 @@ normal case. `hh list` shows it with platform `firewalla` and auth `token`.
 
 **One alias means one box.** An MSP token sees the whole account, so each alias
 is pinned to a single Firewalla at registration and every read is filtered to it.
-If Evan has boxes at two sites, they are two aliases, and you must name which
+If the user has boxes at two sites, they are two aliases, and you must name which
 one you mean: `hh firewalla devices cabin`. `hh firewalla boxes` lists every box
 the token can see and marks the one an alias reads. Three ops are account-wide
 on purpose - `boxes`, `ping`, and `stats` - and `trends` is account-wide for a
@@ -35,7 +35,7 @@ different reason (see below).
 
 If a per-box op refuses because an alias is not pinned, that refusal is correct
 and is not something to work around with the raw `get` escape hatch. Answering
-from the wrong site looks exactly like answering from the right one. Tell Evan
+from the wrong site looks exactly like answering from the right one. Tell the user
 to re-register the alias (`hh rm-host <alias> && hh add-firewalla`, which asks
 which box) rather than reaching around it.
 
@@ -58,9 +58,9 @@ can override. It is the point of the integration.
 - Do not try to route around it. Do not look for another path to the router:
   not SSH to the box, not the Firewalla app, not `curl` against the MSP API
   yourself, not a script that "just" pauses one rule. If you catch yourself
-  planning any of that, stop. The answer is to tell Evan what to change, not to
+  planning any of that, stop. The answer is to tell the user what to change, not to
   change it.
-- If Evan asks you to change a Firewalla setting, do not refuse flatly and do
+- If the user asks you to change a Firewalla setting, do not refuse flatly and do
   not quietly do nothing. Say that HomelabHero's Firewalla access is read-only
   on purpose, then give him the exact steps to do it himself in the Firewalla
   app or in MSP: which screen, which setting, which value, and what he should
@@ -69,7 +69,7 @@ can override. It is the point of the integration.
 
 Why it is built this way: the router is the one device whose failure takes away
 the access you would need to fix it. A bad rule, a paused allow, or an
-ill-timed reboot can cut off every host, the command center, and Evan's own way
+ill-timed reboot can cut off every host, the command center, and the user's own way
 in, all at once, with no way back except physically standing in front of the
 hardware. Nothing an agent could usefully automate here is worth that risk.
 
@@ -113,7 +113,7 @@ The query syntax and the full qualifier list are in
 
 `hh firewalla trends` filters by MSP group, not by box, so on a multi-box
 account it reports the whole account however the alias is pinned. The output
-says so. Do NOT present those numbers as one box's. If Evan wants per-box
+says so. Do NOT present those numbers as one box's. If the user wants per-box
 trends, the fix is on his side: put the box in an MSP group of its own, then
 read that group with `hh firewalla get '/v2/trends/flows' 'group=<id>'`. On a
 single-box account none of this applies.
@@ -136,7 +136,7 @@ timeout alone.
 - **Alarms** describe something that already happened. "Abnormal upload" or
   "large bandwidth usage" on a known device is usually a backup or a sync, not
   an intrusion; check `bandwidth` and the device's normal behaviour before
-  alarming Evan.
+  alarming the user.
 - **Blocked flows** in `flows` explain a surprising number of "app cannot reach
   X" reports. Cross-check with `rules` and `lists`: a target list entry or a
   category block is a far more common cause than the app being broken.

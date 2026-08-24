@@ -2,7 +2,7 @@
 name: docker-stack-ops
 description: >
   Troubleshoot and manage the Docker / Dockge stacks over SSH, especially the
-  arr media stack. Use this whenever Evan mentions a container, Docker, Dockge, a
+  arr media stack. Use this whenever the user mentions a container, Docker, Dockge, a
   compose stack, or any specific app such as Jellyfin, qBittorrent, gluetun,
   Radarr, Sonarr, Prowlarr, Seerr, Immich, Seafile, SearXNG, or similar, and
   whenever the symptom is app-level: a container is down, restarting, unhealthy,

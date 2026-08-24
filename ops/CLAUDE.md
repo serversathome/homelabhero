@@ -168,3 +168,23 @@ reachability and DNS early with hh test and the network-diag skill.
 @infra/truenas.md
 @infra/network.md
 @infra/docker-stacks.md
+
+## Which files here are yours
+
+HomelabHero updates itself weekly, and that update re-delivers the files it
+ships: this `CLAUDE.md`, `capabilities/`, and everything under `.claude/`
+(the skills and `settings.json`). Everything else - `infra/`, `inventory/`,
+`runbooks/`, `hosts/` - is yours and is only ever added to.
+
+Edits to a shipped file are not lost. The update compares against a pristine
+copy of what was last shipped, so a file you have changed is kept as-is; if a
+newer version ships for that same file, it is written beside it as
+`<file>.upstream` and named in the update output for you to merge. Nothing is
+overwritten silently and nothing is deleted.
+
+Even so, the right home for local additions is `CLAUDE.local.md`, imported
+below. It is never touched by an update at all, so it needs no merging, ever.
+Put your name, your house rules, and pointers to your own docs there rather than
+editing this file.
+
+@CLAUDE.local.md

@@ -2,7 +2,7 @@
 name: network-diag
 description: >
   Diagnose homelab connectivity, DNS, mesh, and ingress issues. Use this
-  whenever Evan reports that hosts or services are unreachable, DNS is not
+  whenever the user reports that hosts or services are unreachable, DNS is not
   resolving, the NetBird mesh is flaky, a Cloudflare Tunnel is down, the
   UCG-Ultra gateway or Netgear 10GbE switch is involved, a link dropped or
   renegotiated speed, or a service works locally but not remotely. Trigger this

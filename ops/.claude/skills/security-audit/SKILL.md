@@ -4,7 +4,7 @@ description: >
   Read-only security-posture review of a managed host or the whole estate:
   pending updates, listening services and open ports, SSH hardening, user
   accounts and sudo, failed logins, firewall state, and platform-specific
-  exposure. Use whenever Evan asks to audit, harden, or security-check a box, or
+  exposure. Use whenever the user asks to audit, harden, or security-check a box, or
   asks "is this exposed", "what ports are open", "any security issues", "are we
   patched", or wants a hardening review. Diagnose and report first; propose fixes
   and get an explicit go-ahead before changing anything.

@@ -2,7 +2,7 @@
 name: inventory
 description: >
   Build a complete live inventory of everything running across the homelab. Use
-  this whenever Evan asks what is running, what VMs / LXCs / containers / apps
+  this whenever the user asks what is running, what VMs / LXCs / containers / apps
   exist, "what's on <host>", "give me the full picture", "what do I have",
   capacity of guests, or wants an audit of the whole estate. Also use it as the
   grounding step before any change so you are working from current truth, not

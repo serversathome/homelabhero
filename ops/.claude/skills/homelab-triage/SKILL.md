@@ -2,12 +2,12 @@
 name: homelab-triage
 description: >
   Top-level triage and health-overview workflow for the homelab. Use this
-  whenever Evan asks broad or symptom-first questions like "what's wrong",
+  whenever the user asks broad or symptom-first questions like "what's wrong",
   "is everything okay", "something's down", "the homelab feels slow", "give me
   an overview", "health check", "status of everything", or reports a problem
   without naming the layer. Also use it as the first step for any incident where
   the failing component is not yet obvious, before dropping into the
-  host-specific skills. Reach for this even when Evan does not say the word
+  host-specific skills. Reach for this even when the user does not say the word
   "triage" but is clearly asking for a whole-system look or reporting a vague
   fault.
 ---

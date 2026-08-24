@@ -2,7 +2,7 @@
 name: host-ops
 description: >
   Troubleshoot and manage generic Linux hosts (anything that is not Proxmox or
-  TrueNAS). Use this whenever Evan points at a plain Linux server, VM, or
+  TrueNAS). Use this whenever the user points at a plain Linux server, VM, or
   container host by alias and asks about services, disk space, networking,
   updates, processes, or logs, or when a host is slow, down, or misbehaving. It
   drives systemd, packages, storage, and networking over SSH. Trigger this for

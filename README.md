@@ -356,14 +356,34 @@ What it will and will not touch is deliberate:
 
 - **Refreshed** (HomelabHero-owned): the CLI binaries, `.claude/skills/`,
   `.claude/settings.json`, `CLAUDE.md`, `capabilities/`, the logrotate/sudoers/service
-  templates, and the Node/npm stack. An in-place edit to one of these *shipped* files
-  will be overwritten - customize instead by adding your own skill, using
-  `settings.local.json`, or filling in the notes below.
-- **Never touched** (yours): your environment notes under `infra/`, `inventory/`,
-  `runbooks/`, `hosts/`, your edited cron schedule, and `cloudcli.env`. Your own
-  custom skills in `.claude/skills/` are preserved too. Ops-brain changes land in the
-  working tree, so `git -C ~hhagent/homelab-ops diff` shows exactly what an update
-  changed.
+  templates, and the Node/npm stack.
+- **Never touched** (yours): `CLAUDE.local.md`, your environment notes under `infra/`,
+  `inventory/`, `runbooks/`, `hosts/`, your edited cron schedule, and `cloudcli.env`.
+  Your own custom skills in `.claude/skills/` are preserved too.
+
+**Your edits to a shipped file are not overwritten.** HomelabHero keeps a pristine
+copy of what it last delivered, under `/etc/homelabhero/shipped/`, and compares three
+ways on every update - the same way `dpkg` handles a config file:
+
+| your file vs. last shipped | upstream changed? | what happens |
+|---|---|---|
+| unchanged | yes | the update lands, silently |
+| you edited it | no | left alone, silently |
+| you edited it | yes | **your copy is kept**; the new one is written beside it as `<file>.upstream` and named in the update output |
+
+Nothing is overwritten without saying so, and nothing is deleted. `hh doctor` reports
+how many shipped files you have edited and whether any `.upstream` versions are
+waiting to be merged.
+
+The one exception is the first update after this behaviour shipped: with no pristine
+copy to compare against yet, an edit is indistinguishable from an old version, so the
+update lands and your previous file is saved as `<file>.bak-<timestamp>`. Every run
+after that preserves in place instead.
+
+Even so, the best home for local additions is **`CLAUDE.local.md`**, which `CLAUDE.md`
+imports and the installer never touches. Put your name, your house rules, and pointers
+to your own docs there and there is nothing to merge, ever. The ops brain is also a git
+repo, so `git -C ~hhagent/homelab-ops diff` still shows what an update changed.
 
 Because an update can occasionally break something, `hh doctor` checks the whole
 chain in one pass: the users, the broker, vault permissions, the service, Claude's

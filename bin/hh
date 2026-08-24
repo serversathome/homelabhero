@@ -9,9 +9,12 @@
 #
 set -euo pipefail
 
-HH_VERSION="1.3.1"
+HH_VERSION="1.3.2"
 REG_DIR="/etc/homelabhero/hosts.d"
 VAULT_DIR="/etc/homelabhero/vault"
+# Pristine copy of the ops files HomelabHero ships, as last delivered. Diffing
+# the live ops brain against it is what "have I edited this" means.
+SHIPPED_DIR="/etc/homelabhero/shipped"
 VAULT_USER="hhvault"
 AGENT_USER="hhagent"
 BROKER="/usr/local/bin/hh-connect"
@@ -557,6 +560,35 @@ cmd_doctor() {
   cv="$(sudo -n -u "$AGENT_USER" -H bash -c "export NVM_DIR=\"${ahome}/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\" >/dev/null 2>&1; export PATH=\"${ahome}/.local/bin:\$PATH\"; command -v claude >/dev/null && printf '%s\t%s' \"\$(claude --version 2>/dev/null | head -1)\" \"\$(command -v claude)\"" 2>/dev/null | tail -1 || true)"
   if [ -n "$cv" ]; then ok "claude: $(printf '%s' "$cv" | awk -F'\t' '{print $1" at "$2}')"
   else note "could not read claude version here (fine if not run with sudo)"; fi
+
+  # The ops brain is half shipped and half yours, and an update preserves your
+  # half rather than overwriting it. That is only trustworthy if you can see
+  # what it decided, so say it here instead of leaving it to a git diff.
+  echo "Ops brain"
+  local opsdir="${ahome}/homelab-ops" edited=0 pending=0 sf rel
+  if [ -d "$SHIPPED_DIR" ] && [ -r "$opsdir" ]; then
+    while IFS= read -r sf; do
+      rel="${sf#"${SHIPPED_DIR}/"}"
+      [ -e "${opsdir}/${rel}" ] || continue
+      cmp -s "$sf" "${opsdir}/${rel}" || edited=$((edited+1))
+      [ -e "${opsdir}/${rel}.upstream" ] && pending=$((pending+1))
+    done < <(find "$SHIPPED_DIR" -type f 2>/dev/null)
+    if [ "$edited" -gt 0 ]; then
+      ok "${edited} shipped file(s) edited locally; updates keep your version"
+    else
+      ok "shipped files match what was last delivered"
+    fi
+    if [ "$pending" -gt 0 ]; then
+      note "${pending} newer shipped version(s) waiting as *.upstream in ${opsdir}"
+      printf '           merge what you want from them, then delete them:\n'
+      printf '           find %s -name "*.upstream"\n' "$opsdir"
+    fi
+    [ -e "${opsdir}/CLAUDE.local.md" ] || note "no CLAUDE.local.md yet (run: hh update) - it is the place for local notes that never need merging"
+  elif [ ! -d "$SHIPPED_DIR" ]; then
+    note "no pristine copy at ${SHIPPED_DIR} yet; run 'hh update' once and local edits are preserved from then on"
+  else
+    note "cannot read ${opsdir} from here (fine if not run with sudo)"
+  fi
 
   echo "Hosts"
   shopt -s nullglob
