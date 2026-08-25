@@ -24,6 +24,45 @@ easy to get wrong and changes if a date is added to the heading.
 When adding a version, keep the three in sync: the anchor (`v1-1-0`), the git
 tag (`v1.1.0`), and `HH_VERSION` in `bin/hh` (`1.1.0`).
 
+<a id="v1-3-3"></a>
+
+## 1.3.3 (2026-08-25)
+
+The 1.3.2 transition works as intended now, rather than flattening local edits
+once on the way in.
+
+### Fixed
+
+- The shipped-file baseline is seeded by the installer, so the update that
+  introduces it no longer resets your edits. 1.3.2 put that seeding in
+  `hh-update`, which cannot work and never once did: `hh-update` pulls and then
+  runs the installer, and the installer is what replaces `hh-update`, so during
+  the very update that first needs a baseline the `hh-update` on the box is
+  still the old one from before the code existed. Every box therefore took the
+  fallback path - update applied, previous file saved as `<file>.bak-<stamp>` -
+  which loses nothing but flattens every local edit once and leaves a backup
+  beside every file that changed, edited or not.
+
+  The seeding now lives in the installer, which IS already the new version at
+  that point, and recovers the previous revision from `ORIG_HEAD` (set by the
+  `git reset --hard` that `hh-update` just did). On a simulated 1.3.1 box with
+  local edits: 16 untouched files updated silently, 1 genuine conflict kept with
+  its `.upstream`, and no backups at all, where before every shipped file was
+  replaced and backed up.
+
+  If you already updated to 1.3.2, you have taken this hit and your baseline
+  exists - nothing further to do, and your `.bak-` files can be deleted once you
+  have re-applied anything you wanted. If you have not updated yet, the
+  transition will be clean.
+
+  Found by @bnaert, who verified the 1.3.2 behaviour on a real install and
+  reported exactly what happened.
+
+- The unreachable copy in `hh-update` is removed rather than left in place. Code
+  that claims to do something it structurally cannot is worse than no code, and
+  this is the second bug in a row caused by putting update logic where it could
+  not run.
+
 <a id="v1-3-2"></a>
 
 ## 1.3.2 (2026-08-24)

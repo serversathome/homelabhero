@@ -201,6 +201,40 @@ rm -f "$TMP_SUDO"
 say "6/10  Ops brain -> ${AGENT_HOME}/homelab-ops"
 OPS_DST="${AGENT_HOME}/homelab-ops"
 sudo -u "$AGENT_USER" mkdir -p "$OPS_DST"
+
+# Seed the baseline for a box that has never had one.
+#
+# Without a baseline the sync below cannot tell "the user edited this" from
+# "this is simply the old version", so it falls back to overwrite-with-.bak:
+# lossless, but it flattens every local edit once and leaves a backup beside
+# every file that changed, edited or not.
+#
+# This has to live HERE, in the installer, and that is the whole point. During
+# the update that first introduces the baseline, the hh-update running on the
+# box is still the OLD one, from before any of this code existed - hh-update
+# pulls and then runs the installer, and the installer is what replaces
+# hh-update. So the new hh-update only exists after the run that needed it.
+# Anything written there for this transition can never fire for it. That is not
+# hypothetical: 1.3.2 put the seeding in hh-update and it never ran once.
+#
+# The installer, by contrast, IS already the new version at this point. And it
+# can recover what it needs: `git reset --hard` in hh-update sets ORIG_HEAD to
+# the revision the box was running before the pull, which is exactly the tree
+# that produced the live ops brain.
+if [ ! -d "$SHIPPED_DIR" ] && [ -d "${REPO_ROOT}/.git" ]; then
+  PREV_REV="$(git -C "$REPO_ROOT" rev-parse --verify --quiet ORIG_HEAD || true)"
+  if [ -n "${PREV_REV:-}" ]; then
+    $SUDO install -d -o root -g root -m 755 "$SHIPPED_DIR"
+    if git -C "$REPO_ROOT" archive "$PREV_REV" ops 2>/dev/null \
+         | $SUDO tar -x --strip-components=1 -C "$SHIPPED_DIR" 2>/dev/null; then
+      say "    baseline seeded from ${PREV_REV:0:7}; local edits will be preserved, not backed up"
+    else
+      # Not fatal - the sync just falls back to backing up whatever it replaces.
+      [ -n "$SHIPPED_DIR" ] && $SUDO rm -rf -- "$SHIPPED_DIR"
+      warn "could not seed the shipped-file baseline; files this update replaces will be backed up instead"
+    fi
+  fi
+fi
 $SUDO install -d -o root -g root -m 755 "$SHIPPED_DIR"
 
 # Two halves to the ops tree, and `hh update` re-runs this installer weekly, so
