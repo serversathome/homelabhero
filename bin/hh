@@ -9,7 +9,7 @@
 #
 set -euo pipefail
 
-HH_VERSION="1.3.2"
+HH_VERSION="1.3.3"
 REG_DIR="/etc/homelabhero/hosts.d"
 VAULT_DIR="/etc/homelabhero/vault"
 # Pristine copy of the ops files HomelabHero ships, as last delivered. Diffing
