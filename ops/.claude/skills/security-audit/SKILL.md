@@ -76,4 +76,12 @@ Firewall (is anything actually filtering?):
 Note: the HomelabHero control plane has its own deliberate posture (the
 privilege-separated broker, the vault, the narrow sudoers rule). Auditing it is
 fine, but do not "fix" a finding by weakening the vault, broker, or sudoers - that
-separation is intentional (see the top-level README and CLAUDE.md).
+separation is intentional.
+
+Read `CLAUDE.md` for why, and in particular the section on how strongly each
+integration is fenced: the three tiers are not the same, and a finding that
+looks like "this one is less locked down than that one" is usually describing a
+difference that is deliberate. The capability catalogs carry the per-platform
+detail. (The repository README covers the same ground for a reader on GitHub,
+but it is not installed here - only `ops/` is - so do not send anyone to it from
+this box.)
