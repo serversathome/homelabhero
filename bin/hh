@@ -12,7 +12,7 @@
 #
 set -euo pipefail
 
-HH_VERSION="1.4.0"
+HH_VERSION="1.5.0"
 REG_DIR="/etc/homelabhero/hosts.d"
 VAULT_DIR="/etc/homelabhero/vault"
 # Pristine copy of the ops files HomelabHero ships, as last delivered. Diffing
@@ -71,8 +71,8 @@ HomelabHero
                                         rm-group
                                  destructive ops need --force
   hh cloudflare <op> [alias]   read AND manage Cloudflare DNS, tunnels, Access.
-                                 read:  summary ping info zones records tunnels
-                                        tunnel-show access-apps get
+                                 read:  summary ping info account zones records
+                                        tunnels tunnel-show access-apps get
                                  write: dns-set dns-proxy dns-delete
                                         tunnel-route tunnel-unroute purge
                                         access-revoke
@@ -297,7 +297,8 @@ cmd_netbird() {
 cmd_cloudflare() {
   local op="${1:-}"; shift || true
   [ -n "$op" ] || die "usage: hh cloudflare <op> [alias] [args]
-  read:  summary ping info zones records tunnels tunnel-show access-apps get
+  read:  summary ping info account zones records tunnels tunnel-show
+         access-apps get
   write: dns-set dns-proxy dns-delete tunnel-route tunnel-unroute purge
          access-revoke"
   local alias=""
@@ -1154,11 +1155,20 @@ put full account control in the vault.
   For READ-ONLY (everything HomelabHero reports still works):
       Account | Cloudflare Tunnel          | Read
       Account | Access: Apps and Policies  | Read
+      Account | Account Settings           | Read      <- see note
       Zone    | Zone                       | Read
       Zone    | DNS                        | Read
 
+  Account Settings: Read is what lets the token LIST your accounts, which is how
+  the tunnel and Access ops know which account to address. Without it Cloudflare
+  answers that request with an empty list rather than an error. HomelabHero works
+  around it by reading the account off one of your zones, so a token without it
+  is fine as long as the token can also see at least one zone - but granting it
+  is the tidier answer, and it grants nothing else.
+
   To also let HomelabHero CHANGE things, use Edit instead of Read for
-  Cloudflare Tunnel and DNS. That enables: dns-set, dns-proxy, dns-delete,
+  Cloudflare Tunnel and DNS. Leave Account Settings on Read - nothing here
+  writes account settings. That enables: dns-set, dns-proxy, dns-delete,
   tunnel-route, tunnel-unroute, purge and access-revoke.
 
   Under "Zone Resources", prefer "Include -> Specific zone" and name only the
@@ -1202,7 +1212,11 @@ EOF
   if cmd_test "$alias"; then
     # Resolve and cache the account id so the first real command is not slower
     # than every one after it.
-    cloudflare_broker zones "$alias" >/dev/null 2>&1 || true
+    # Resolve and cache the account id now, so the first tunnel or Access
+    # command is not slower than every one after it - and so a token that cannot
+    # resolve one says so here, while the operator is still at the keyboard,
+    # rather than on some later call.
+    cloudflare_broker account "$alias" 2>&1 | sed 's/^/  /' >/dev/tty || true
     echo >/dev/tty
     cloudflare_broker summary "$alias" 2>&1 | sed 's/^/  /' >/dev/tty || true
   else

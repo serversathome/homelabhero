@@ -347,28 +347,65 @@ _remember() {
 # applies: resolve silently when there is exactly one, REFUSE when there are
 # several. Picking the first would be a guess, and a guess that returns a
 # plausible tunnel list from the wrong account is the failure this prevents.
+#
+# THERE ARE TWO WAYS TO FIND IT, and the obvious one is not the reliable one.
+# GET /accounts lists "accounts you have ownership or verified access to", and
+# needs the token to carry Account Settings: Read. A perfectly good token scoped
+# to Cloudflare Tunnel and Access - which is exactly what this broker asks people
+# to create - does NOT carry that, and the endpoint then answers 200 with an
+# EMPTY LIST rather than an error. Read literally that says "you have no
+# accounts", which is never true of a working token and sent the first person to
+# use this off adding permissions they did not need.
+#
+# So fall back to the zone list, where every zone carries the account it belongs
+# to. Zone: Read is already required for the DNS ops, so this costs nothing and
+# works on the narrower token.
 _account() {
-  if [ -z "$ACCOUNT" ]; then
-    local j n
-    j="$(_result "${API}/accounts")"
-    _expect_array "$j" "${API}/accounts"
+  [ -n "$ACCOUNT" ] && { printf '%s' "$ACCOUNT"; return 0; }
+
+  local j n src="the account list"
+  j="$(_result "${API}/accounts" 2>/dev/null)" || j="[]"
+  printf '%s' "$j" | jq -e 'type == "array"' >/dev/null 2>&1 || j="[]"
+  n="$(printf '%s' "$j" | jq -r 'length')"
+
+  if [ "$n" -eq 0 ]; then
+    # Derive it from the zones instead. Distinct accounts only: several zones
+    # under one account is the normal case and is not ambiguity.
+    local z; z="$(_result "${API}/zones" "per_page=100" 2>/dev/null)" || z="[]"
+    printf '%s' "$z" | jq -e 'type == "array"' >/dev/null 2>&1 || z="[]"
+    j="$(printf '%s' "$z" | jq -c '[.[] | .account | select(. != null) | {id, name}] | unique_by(.id)')"
     n="$(printf '%s' "$j" | jq -r 'length')"
-    case "$n" in
-      0) die "the token works, but it cannot see any Cloudflare account.
-    Tunnels and Access are account-scoped; add Account permissions to the token." ;;
-      1) ACCOUNT="$(printf '%s' "$j" | jq -r '.[0].id')"
-         ACCOUNT_NAME="$(printf '%s' "$j" | jq -r '.[0].name // "?"')"
-         _remember ACCOUNT "$ACCOUNT"
-         _remember ACCOUNT_NAME "$ACCOUNT_NAME" ;;
-      *) die "'${ALIAS}' is not pinned to an account, and this token can see ${n}.
-    Rather than guess which one you meant, this refuses. Re-register it and pick,
-    from an admin shell:
-        hh rm-host ${ALIAS}
-        hh add-cloudflare
-    Accounts this token can see:
-$(printf '%s' "$j" | jq -r '.[] | "        \(.name // "?")  \(.id)"')" ;;
-    esac
+    src="the zones this token can see"
   fi
+
+  case "$n" in
+    0) die "the token is valid, but nothing it can see names an account, so the
+    account-scoped ops (tunnels, access) have nothing to address.
+
+    Two ways to fix it, either is fine:
+
+      * Add 'Account | Account Settings | Read' to the token. That is what
+        lets it list accounts directly. Re-create the token, then:
+            hh rm-host ${ALIAS} && hh add-cloudflare
+
+      * Or give this alias the account id by hand. It is not a secret - it is
+        in the Cloudflare dashboard URL, and on the right of the account home
+        page. From an admin shell:
+            echo 'ACCOUNT=<your-account-id>' | sudo tee -a ${CONF}
+
+    The zone-scoped ops need neither: 'hh cloudflare zones' and
+    'hh cloudflare records <zone>' work right now." ;;
+    1) ACCOUNT="$(printf '%s' "$j" | jq -r '.[0].id')"
+       ACCOUNT_NAME="$(printf '%s' "$j" | jq -r '.[0].name // "?"')"
+       _remember ACCOUNT "$ACCOUNT"
+       _remember ACCOUNT_NAME "$ACCOUNT_NAME" ;;
+    *) die "'${ALIAS}' is not pinned to an account, and ${src} names ${n} of them.
+    Rather than guess which one you meant, this refuses. Pin it from an admin
+    shell:
+        echo 'ACCOUNT=<the-one-you-want>' | sudo tee -a ${CONF}
+    Accounts visible here:
+$(printf '%s' "$j" | jq -r '.[] | "        \(.name // "?")  \(.id)"')" ;;
+  esac
   printf '%s' "$ACCOUNT"
 }
 
@@ -459,6 +496,28 @@ op_ping() {
   [ "$st" = "active" ] || die "the Cloudflare token is not active (status: ${st})"
   printf 'cloudflare-ok %s (token active, can %s)\n' "$HOST" \
     "$(if [ "$WRITE" = "yes" ]; then echo write; else echo read; fi)"
+}
+
+# Says which account this alias resolves to and stops there. Exists because the
+# failure above was invisible: every op that needed an account failed the same
+# way, and nothing said what the account was or where it came from.
+op_account() {
+  # Note the redirect rather than a command substitution. $( ) runs a SUBSHELL,
+  # so _account's assignments to ACCOUNT_NAME would be discarded the moment it
+  # returned, and this would report the id with a "?" for the name it had just
+  # successfully looked up. Redirecting stdout keeps it in this shell.
+  local was_cached=0
+  grep -q '^ACCOUNT=' "$CONF" 2>/dev/null && was_cached=1
+  _account >/dev/null
+  printf 'Account   %s\n' "$ACCOUNT"
+  printf 'Name      %s\n' "${ACCOUNT_NAME:-?}"
+  if [ "$was_cached" -eq 1 ]; then
+    printf 'Source    cached in this alias registry entry\n'
+  elif grep -q '^ACCOUNT=' "$CONF" 2>/dev/null; then
+    printf 'Source    resolved from Cloudflare just now, and cached for next time\n'
+  else
+    printf 'Source    resolved from Cloudflare just now (could not be cached; harmless)\n'
+  fi
 }
 
 op_zones() {
@@ -560,7 +619,10 @@ op_summary() {
 
   # Deliberately NOT tolerated: if the token is refused, that is the answer.
   op_ping >/dev/null
-  acct="$(_account)"
+  # Redirect, not $( ) - see the note in op_account. In a subshell the name
+  # resolved here would be lost and this line would print a bare id.
+  _account >/dev/null
+  acct="$ACCOUNT"
   printf 'Cloudflare %s   account %s   (token can %s)\n' "$HOST" \
     "${ACCOUNT_NAME:-$acct}" "$(if [ "$WRITE" = "yes" ]; then echo write; else echo read; fi)"
 
@@ -849,6 +911,7 @@ case "$OP" in
   ping)           op_ping ;;
   info)           op_info ;;
   summary)        op_summary ;;
+  account)        op_account ;;
   zones)          op_zones ;;
   # These three are named so that no read op is a PREFIX of a write op. Claude's
   # permission rules match on a command prefix, so allow-listing "hh cloudflare
@@ -878,7 +941,8 @@ case "$OP" in
     exist yet, it should be added here and reviewed, not composed at the call
     site." ;;
   *) die "unknown op: ${OP}
-    read:  ping info summary zones records tunnels tunnel-show access-apps get
+    read:  ping info summary account zones records tunnels tunnel-show
+           access-apps get
     write: dns-set dns-proxy dns-delete tunnel-route tunnel-unroute purge
            access-revoke" ;;
 esac

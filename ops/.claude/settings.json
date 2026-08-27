@@ -116,6 +116,8 @@
       "Bash(hh cloudflare access-apps:*)",
       "Bash(hh cloudflare get)",
       "Bash(hh cloudflare get:*)",
+      "Bash(hh cloudflare account)",
+      "Bash(hh cloudflare account:*)",
       "Bash(hh doctor)",
       "Bash(hh diff)",
       "Bash(hh diff:*)",

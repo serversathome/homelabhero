@@ -24,6 +24,7 @@ tunnel token <name>` on a trusted host - never through an agent session.
 
 - One-screen picture: `hh cloudflare summary`
 - Token validity and capability: `hh cloudflare ping`
+- Which account this alias resolves to, and how: `hh cloudflare account`
 - Raw account list: `hh cloudflare info`
 
 `summary` names any tunnel that is not healthy, and any zone that is not active.
