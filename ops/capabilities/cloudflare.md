@@ -121,6 +121,16 @@ not published until both are done.
 **DNS is cached.** A change does not reach everyone at once, and a wrong one
 outlives the moment it was made.
 
+## What Cloudflare cannot tell you
+
+It knows the edge: DNS as the world resolves it, whether a tunnel has live
+connections, what Access protects. It does NOT know whether the origin behind a
+tunnel is healthy - a tunnel reports `healthy` whenever its connectors are
+attached, including while the service behind them returns errors all day.
+
+If the account also runs NetBird BYOP, Cloudflare is not the only ingress
+either; a hostname absent here may be published through NetBird instead.
+
 ## Not available here
 
 Creating or deleting tunnels and zones, editing Access policies, WAF and page

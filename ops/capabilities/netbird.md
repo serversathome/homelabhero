@@ -149,6 +149,14 @@ confirmation prompt and put it to the user rather than re-running it yourself.
 - Create a setup key: `hh netbird key-create <name> [reusable|one-off] [days]
   [group ...]` - **terminal only**, never in an agent session
 
+## What NetBird cannot tell you
+
+It knows the overlay and, where BYOP is in use, what that publishes. It does NOT
+know whether the service on a peer is healthy, whether the LAN beneath it is
+fine, or what a Cloudflare Tunnel is doing. A peer can be `connected`, a policy
+can allow it, a proxy cluster can be online, and the application behind all
+three can still be down.
+
 ## Not available here
 
 Anything not in the list above. There is no `post`, `put`, or `raw`. Creating

@@ -112,6 +112,27 @@ is published only when an ingress rule AND a CNAME to
 independently of how it is served, and turning a proxied record dns-only
 publishes the origin address in a way no later change undoes.
 
+### Capability boundaries
+
+Five of the seven capability catalogs had no section saying what their platform
+CANNOT tell you. Only `unifi.md` and `firewalla.md` did, and that section is the
+most direct guard against overclaiming: it is where "the VM is running" gets
+separated from "the service is up". All seven now have one.
+
+`proxmox.md` also gains the two model traps that produce confidently wrong
+answers: VMs and containers share one id space cluster-wide, so `qm` and `pct`
+are not interchangeable views of the same thing; and most commands are
+node-scoped, so a guest you cannot find in a cluster is usually on another node
+rather than gone.
+
+`ops/CLAUDE.md` now states that the three integrations are not fenced equally.
+UniFi and Firewalla cannot write at all; NetBird and Cloudflare can, behind a
+broker that refuses destructive ops without `--force`; and `hh run` on a shell
+host can do anything, fenced only by the permission prompt and by the
+"(confirm)" marks in the catalogs, which are instructions to the model rather
+than enforcement. Assuming that machinery is uniform is how a shell host gets
+treated more casually than the integrations that are actually the safer ones.
+
 ### Fixes
 
 - `op_summary` and `op_account` in `hh-cloudflare` called `_account` inside a

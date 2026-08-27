@@ -62,6 +62,17 @@ For any generic Linux box (Debian/Ubuntu/RHEL family) reached via
 - Kernel: `dmesg -T | tail -60`
 - Auth/security: `journalctl -u ssh -n 50 --no-pager`, `lastlog | head`
 
+## What a shell on this host cannot tell you
+
+A shell sees almost everything ON this machine and nothing beyond it. It does
+NOT know why the host is unreachable from somewhere else, what the router or
+the mesh thinks, or whether a name resolves the same way elsewhere.
+
+Also: this catalog lists the commands a Linux box USUALLY has, not the ones this
+one does. Distributions vary and containers are minimal. Check a command exists
+before reporting that its absence means something - `command -v <tool>` - rather
+than reading "not found" as a finding about the system.
+
 ## Hardware
 
 - `lspci`, `lsusb`, `dmidecode -t system` (may need root), `sensors` (if lm-sensors)
