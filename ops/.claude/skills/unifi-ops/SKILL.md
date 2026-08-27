@@ -111,8 +111,8 @@ top of it. When several unrelated things are broken at once, check here early:
 one offline switch explains a dozen unreachable services, and it takes one
 command to rule in or out.
 
-Pair it with `network-diag` for the parts UniFi cannot see: the NetBird mesh,
-DNS resolution, Cloudflare tunnels, and per-host interfaces. UniFi tells you
+Pair it with `netbird-ops` for the mesh, `cloudflare-ops` for ingress, and
+`network-diag` for DNS resolution and per-host interfaces. UniFi tells you
 about the fabric and the gear; `network-diag` tells you about the overlay and
 the hosts on it.
 

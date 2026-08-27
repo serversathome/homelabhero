@@ -123,7 +123,8 @@ fi
 # ---------------------------------------------------------------------------
 say "1/10  OS prerequisites"
 $SUDO apt-get update -y
-# openssl is what pins a UniFi console's TLS key at registration (see hh-unifi).
+# openssl is what pins a TLS key at registration: a UniFi console (see hh-unifi)
+# and a self-hosted NetBird management server (see hh-netbird) both need it.
 $SUDO apt-get install -y --no-install-recommends \
   sudo git curl ca-certificates build-essential openssh-client sshpass \
   tmux jq ripgrep rsync unzip iputils-ping dnsutils netcat-openbsd nmap acl openssl
@@ -157,6 +158,8 @@ say "4/10  Broker, CLI, updater, and weekly auto-update"
 $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-connect" /usr/local/bin/hh-connect
 $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-unifi"   /usr/local/bin/hh-unifi
 $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-firewalla" /usr/local/bin/hh-firewalla
+$SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-netbird" /usr/local/bin/hh-netbird
+$SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-cloudflare" /usr/local/bin/hh-cloudflare
 $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh"         /usr/local/bin/hh
 $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-update"  /usr/local/bin/hh-update
 $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-provision" /usr/local/bin/hh-provision

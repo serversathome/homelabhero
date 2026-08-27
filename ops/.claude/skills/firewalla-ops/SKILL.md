@@ -150,8 +150,8 @@ top of it. When several unrelated things are broken at once, check here early:
 one offline switch port or one over-broad block rule explains a lot of symptoms,
 and it takes one command to rule in or out.
 
-Pair it with `network-diag` for the parts Firewalla cannot see: the NetBird
-mesh, DNS resolution inside a host, Cloudflare tunnels, and per-host interfaces.
+Pair it with `netbird-ops` for the mesh, `cloudflare-ops` for ingress, and
+`network-diag` for DNS resolution inside a host and per-host interfaces.
 Firewalla tells you about the devices and the traffic; `network-diag` tells you
 about the overlay and the hosts on it.
 

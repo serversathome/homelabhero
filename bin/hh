@@ -3,13 +3,16 @@
 # hh - HomelabHero control CLI.
 #
 # Agent-safe (read-only, used by Claude): list, run, test, overview, inventory,
-#   scan, doctor, unifi and firewalla (read ops).
+#   scan, doctor, and the read ops of unifi, firewalla, netbird and cloudflare.
+# Agent-capable but permission-gated: the WRITE ops of netbird and cloudflare.
+#   Those two integrations can change things; unifi and firewalla cannot, by
+#   construction, and that is deliberate - see their brokers.
 # Operator (need sudo, run from an admin shell): add-host, add-unifi,
-#   add-firewalla, rm-host, repin, update, login.
+#   add-firewalla, add-netbird, add-cloudflare, rm-host, repin, update, login.
 #
 set -euo pipefail
 
-HH_VERSION="1.3.3"
+HH_VERSION="1.4.0"
 REG_DIR="/etc/homelabhero/hosts.d"
 VAULT_DIR="/etc/homelabhero/vault"
 # Pristine copy of the ops files HomelabHero ships, as last delivered. Diffing
@@ -20,6 +23,8 @@ AGENT_USER="hhagent"
 BROKER="/usr/local/bin/hh-connect"
 UNIFI_BROKER="/usr/local/bin/hh-unifi"
 FW_BROKER="/usr/local/bin/hh-firewalla"
+NB_BROKER="/usr/local/bin/hh-netbird"
+CF_BROKER="/usr/local/bin/hh-cloudflare"
 UPDATER="/usr/local/bin/hh-update"
 UPDATE_LOG="/var/log/homelabhero-update.log"
 BROKER_LOG="/var/log/homelabhero-broker.log"
@@ -54,6 +59,23 @@ HomelabHero
                                       alarms flows bandwidth rules lists
                                       trends stats get
                                  alias may be omitted with one Firewalla
+  hh netbird <op> [alias]      read AND manage your NetBird mesh over its API.
+                                 read:  summary ping info peers peer groups
+                                        networks routers resources policies
+                                        policy-show dns keys posture events
+                                        traffic get
+                                 write: rename approve ssh expiration group-add
+                                        group-rm policy-enable policy-disable
+                                        key-create key-revoke rm-peer rm-policy
+                                        rm-group
+                                 destructive ops need --force
+  hh cloudflare <op> [alias]   read AND manage Cloudflare DNS, tunnels, Access.
+                                 read:  summary ping info zones records tunnels
+                                        tunnel-show access-apps get
+                                 write: dns-set dns-proxy dns-delete
+                                        tunnel-route tunnel-unroute purge
+                                        access-revoke
+                                 destructive ops need --force
   hh doctor                    check the whole setup is healthy
   hh diff [alias]              inventory drift vs the last saved snapshot
   hh provision <alias> <host> [port] [platform] [user]
@@ -67,8 +89,13 @@ HomelabHero
                                API key (operator, needs sudo)
   hh add-firewalla             register a Firewalla with an MSP personal access
                                token (operator, needs sudo)
-  hh repin <alias>             re-pin a UniFi console's TLS key after you
-                               changed its certificate (operator, needs sudo)
+  hh add-netbird               register a NetBird mesh with a service-user token
+                               (operator, needs sudo)
+  hh add-cloudflare            register a Cloudflare account with a scoped API
+                               token (operator, needs sudo)
+  hh repin <alias>             re-pin a UniFi console's or self-hosted NetBird
+                               server's TLS key after you changed its
+                               certificate (operator, needs sudo)
   hh rm-host <alias>           remove a host and its credential
   hh update                    update EVERYTHING now - HomelabHero (code, skills,
                                Node), then the OS packages (operator, needs sudo;
@@ -113,7 +140,11 @@ _inv_linux()   { local p="$1"; echo "echo '# Containers'; command -v docker >/de
 # to route around it. These helpers are how the rest of the CLI asks "is this
 # one of those?" without duplicating the answer in six places.
 
-_is_unifi() { [ -f "${REG_DIR}/$1.conf" ] && [ "$(conf_get "${REG_DIR}/$1.conf" AUTH)" = "apikey" ]; }
+# Detection is keyed off PLATFORM, never off AUTH. It used to test AUTH=apikey,
+# which was unambiguous while UniFi was the only credentialled API host; with
+# Firewalla, NetBird and Cloudflare all authenticating by token it would now
+# answer "unifi" for three things that are not.
+_is_unifi() { [ -f "${REG_DIR}/$1.conf" ] && [ "$(conf_get "${REG_DIR}/$1.conf" PLATFORM)" = "unifi" ]; }
 unifi_broker() { sudo -n -H -u "$VAULT_USER" "$UNIFI_BROKER" "$@"; }
 
 _unifi_aliases() { shopt -s nullglob; for f in "$REG_DIR"/*.conf; do
@@ -153,6 +184,50 @@ _firewalla_default() {
   esac
 }
 
+# ---- NetBird (service-user token hosts) -------------------------------------
+#
+# NetBird is the overlay, not a box: the "host" is the management API, and what
+# it knows is the mesh - which peers exist, which are connected, what may reach
+# what. Unlike UniFi and Firewalla, this broker can also CHANGE things, because
+# an overlay is not the device whose failure costs you the means to fix it.
+
+_is_netbird() { [ -f "${REG_DIR}/$1.conf" ] && [ "$(conf_get "${REG_DIR}/$1.conf" PLATFORM)" = "netbird" ]; }
+netbird_broker() { sudo -n -H -u "$VAULT_USER" "$NB_BROKER" "$@"; }
+
+_netbird_aliases() { shopt -s nullglob; for f in "$REG_DIR"/*.conf; do
+  local a; a="$(basename "$f" .conf)"; _is_netbird "$a" && printf '%s\n' "$a"; done; }
+
+_netbird_default() {
+  local list; list="$(_netbird_aliases)"
+  case "$(printf '%s' "$list" | grep -c .)" in
+    0) die "no NetBird registered yet. Register one from an admin shell: hh add-netbird" ;;
+    1) printf '%s' "$list" ;;
+    *) die "more than one NetBird registered; name which one: $(printf '%s' "$list" | tr '\n' ' ')" ;;
+  esac
+}
+
+# ---- Cloudflare (scoped API token hosts) ------------------------------------
+#
+# Cloudflare is the front door: DNS for your domain, and the tunnels that
+# publish anything to the outside. Like NetBird it can write, and for the same
+# reason - repointing a record is routine and reversible, in a way that
+# reconfiguring the gateway is not.
+
+_is_cloudflare() { [ -f "${REG_DIR}/$1.conf" ] && [ "$(conf_get "${REG_DIR}/$1.conf" PLATFORM)" = "cloudflare" ]; }
+cloudflare_broker() { sudo -n -H -u "$VAULT_USER" "$CF_BROKER" "$@"; }
+
+_cloudflare_aliases() { shopt -s nullglob; for f in "$REG_DIR"/*.conf; do
+  local a; a="$(basename "$f" .conf)"; _is_cloudflare "$a" && printf '%s\n' "$a"; done; }
+
+_cloudflare_default() {
+  local list; list="$(_cloudflare_aliases)"
+  case "$(printf '%s' "$list" | grep -c .)" in
+    0) die "no Cloudflare account registered yet. Register one from an admin shell: hh add-cloudflare" ;;
+    1) printf '%s' "$list" ;;
+    *) die "more than one Cloudflare account registered; name which one: $(printf '%s' "$list" | tr '\n' ' ')" ;;
+  esac
+}
+
 # ---- routers in general -----------------------------------------------------
 #
 # UniFi and Firewalla are both "a router read over an HTTP API": there is no
@@ -161,8 +236,32 @@ _firewalla_default() {
 # helpers are how the rest of the CLI does that without caring which brand it is
 # looking at.
 
-_is_api_host() { _is_unifi "$1" || _is_firewalla "$1"; }
-_api_broker_path() { if _is_unifi "$1"; then printf '%s' "$UNIFI_BROKER"; else printf '%s' "$FW_BROKER"; fi; }
+_is_api_host() { case "$(_platform_of "$1")" in unifi|firewalla|netbird|cloudflare) return 0 ;; *) return 1 ;; esac; }
+_api_broker_path() {
+  case "$(_platform_of "$1")" in
+    unifi)      printf '%s' "$UNIFI_BROKER" ;;
+    firewalla)  printf '%s' "$FW_BROKER" ;;
+    netbird)    printf '%s' "$NB_BROKER" ;;
+    cloudflare) printf '%s' "$CF_BROKER" ;;
+    *) die "'$1' is not an API host" ;;
+  esac
+}
+# "What is running" means something different per platform: adopted gear on a
+# UniFi console, known devices on a Firewalla, mesh peers on NetBird, published
+# tunnels on Cloudflare. One op name per platform, so the inventory sweep does
+# not have to special-case each of them where it prints.
+_api_detail_op() {
+  case "$(_platform_of "$1")" in
+    netbird)    printf 'peers' ;;
+    cloudflare) printf 'tunnels' ;;
+    *)          printf 'devices' ;;
+  esac
+}
+# Whether this platform's broker is capable of changing anything. UniFi and
+# Firewalla are read-only by construction; NetBird and Cloudflare are not, and
+# doctor and list should say so rather than claiming a guarantee that has
+# quietly stopped applying to half the fleet.
+_api_is_readonly() { case "$(_platform_of "$1")" in unifi|firewalla) return 0 ;; *) return 1 ;; esac; }
 # api_broker <alias> <op> - run one read op against whichever broker owns it.
 api_broker() { local a="$1"; shift; sudo -n -H -u "$VAULT_USER" "$(_api_broker_path "$a")" "$@" "$a"; }
 
@@ -176,6 +275,34 @@ cmd_firewalla() {
   exec sudo -n -H -u "$VAULT_USER" "$FW_BROKER" "$op" "$alias" "$@"
 }
 
+# NetBird and Cloudflare take the same op-first shape as unifi and firewalla:
+# the op, then an OPTIONAL alias consumed only when the next argument actually
+# names a registered host of that platform. That ordering is not cosmetic - the
+# agent's permission rules match on a command PREFIX, so it is what allows
+# "hh netbird peers" while still making "hh netbird rm-peer" ask.
+cmd_netbird() {
+  local op="${1:-}"; shift || true
+  [ -n "$op" ] || die "usage: hh netbird <op> [alias] [args]
+  read:  summary ping info peers peer groups networks routers resources policies
+         policy dns keys posture events traffic get
+  write: rename approve ssh expiration group-add group-rm policy-enable
+         policy-disable key-create key-revoke rm-peer rm-policy rm-group"
+  local alias=""
+  if [ -n "${1:-}" ] && _is_netbird "${1}"; then alias="$1"; shift; else alias="$(_netbird_default)"; fi
+  exec sudo -n -H -u "$VAULT_USER" "$NB_BROKER" "$op" "$alias" "$@"
+}
+
+cmd_cloudflare() {
+  local op="${1:-}"; shift || true
+  [ -n "$op" ] || die "usage: hh cloudflare <op> [alias] [args]
+  read:  summary ping info zones records tunnels tunnel-show access-apps get
+  write: dns-set dns-proxy dns-delete tunnel-route tunnel-unroute purge
+         access-revoke"
+  local alias=""
+  if [ -n "${1:-}" ] && _is_cloudflare "${1}"; then alias="$1"; shift; else alias="$(_cloudflare_default)"; fi
+  exec sudo -n -H -u "$VAULT_USER" "$CF_BROKER" "$op" "$alias" "$@"
+}
+
 cmd_unifi() {
   local op="${1:-}"; shift || true
   [ -n "$op" ] || die "usage: hh unifi <op> [alias] [args]  (ops: summary ping info sites devices device stats clients networks health get)"
@@ -187,10 +314,14 @@ cmd_unifi() {
   exec sudo -n -H -u "$VAULT_USER" "$UNIFI_BROKER" "$op" "$alias" "$@"
 }
 
-# Capture the console's TLS public key so later calls can verify they are still
+# Capture a host's TLS public key so later calls can verify they are still
 # talking to the same box (trust on first use, like SSH's accept-new). Prints a
 # curl --pinnedpubkey value, or nothing if it cannot be read.
-_unifi_pin() {
+#
+# Not UniFi-specific despite where it started: a self-hosted NetBird management
+# server presents its own certificate for the same reason a console does, and
+# wants the same treatment.
+_tls_pin() {
   local host="$1" port="$2" pin
   pin="$(echo | openssl s_client -connect "${host}:${port}" -servername "$host" 2>/dev/null \
     | openssl x509 -pubkey -noout 2>/dev/null \
@@ -222,12 +353,17 @@ cmd_list() {
   shopt -s nullglob
   local files=("$REG_DIR"/*.conf)
   [ "${#files[@]}" -gt 0 ] || { echo "No hosts registered yet. Run: hh add-host"; return 0; }
-  printf '%-14s %-9s %-22s %-6s %-10s %s\n' ALIAS PLATFORM HOST PORT USER AUTH
+  printf '%-14s %-11s %-24s %-6s %-14s %-8s %s\n' ALIAS PLATFORM HOST PORT USER AUTH ACCESS
   for f in "${files[@]}"; do
-    local a; a="$(basename "$f" .conf)"
-    printf '%-14s %-9s %-22s %-6s %-10s %s\n' \
+    local a access; a="$(basename "$f" .conf)"
+    if _is_api_host "$a"; then
+      if _api_is_readonly "$a"; then access="read-only"
+      elif [ "$(conf_get "$f" WRITE)" = "yes" ]; then access="READ/WRITE"
+      else access="read-only"; fi
+    else access="shell"; fi
+    printf '%-14s %-11s %-24s %-6s %-14s %-8s %s\n' \
       "$a" "$(conf_get "$f" PLATFORM)" "$(conf_get "$f" HOST)" \
-      "$(conf_get "$f" PORT)" "$(conf_get "$f" USER)" "$(conf_get "$f" AUTH)"
+      "$(conf_get "$f" PORT)" "$(conf_get "$f" USER)" "$(conf_get "$f" AUTH)" "$access"
   done
 }
 
@@ -292,7 +428,7 @@ _inventory_one() {
     uout="$(api_broker "$a" summary 2>/dev/null)" || { echo "UNREACHABLE"; return; }
     printf '%s\n' "$uout"
     echo
-    uout="$(api_broker "$a" devices 2>/dev/null)" && printf '%s\n' "$uout"
+    uout="$(api_broker "$a" "$(_api_detail_op "$a")" 2>/dev/null)" && printf '%s\n' "$uout"
     return
   fi
   if ! broker "$a" 'true' 2>/dev/null; then echo "UNREACHABLE"; return; fi
@@ -515,6 +651,9 @@ EOF
         unifi)     cmd_add_host --host "$ip" --port 443 --platform unifi ;;
         firewalla) echo "A Firewalla is not registered by address: HomelabHero reads it through"
                    echo "Firewalla MSP. Register it with 'hh add-firewalla' instead. Skipping ${ip}." ;;
+        netbird|cloudflare)
+                   echo "${plat} is not registered by address - it is an account and an API, not a"
+                   echo "box on this subnet. Register it with 'hh add-${plat}' instead. Skipping ${ip}." ;;
         *)         cmd_add_host --host "$ip" --port 22 --platform "$plat" ;;
       esac
     done
@@ -522,6 +661,8 @@ EOF
     echo "Router note: a Firewalla does not appear here as something to register."
     echo "It has no local API to read, so it is added through Firewalla MSP with:"
     echo "    hh add-firewalla"
+    echo "    hh add-netbird"
+    echo "    hh add-cloudflare"
   else
     echo; echo "To register: hh scan ${cidr} --add   (or: hh add-host)"
   fi
@@ -540,6 +681,8 @@ cmd_doctor() {
   [ -x "$BROKER" ] && ok "broker installed" || bad "broker missing at ${BROKER}"
   [ -x "$UNIFI_BROKER" ] && ok "unifi broker installed (read-only)" || note "unifi broker missing at ${UNIFI_BROKER} (run: hh update)"
   [ -x "$FW_BROKER" ] && ok "firewalla broker installed (read-only)" || note "firewalla broker missing at ${FW_BROKER} (run: hh update)"
+  [ -x "$NB_BROKER" ] && ok "netbird broker installed (read/write)" || note "netbird broker missing at ${NB_BROKER} (run: hh update)"
+  [ -x "$CF_BROKER" ] && ok "cloudflare broker installed (read/write)" || note "cloudflare broker missing at ${CF_BROKER} (run: hh update)"
   if [ -d "$VAULT_DIR" ]; then
     local perm; perm="$(stat -c '%a %U' "$VAULT_DIR" 2>/dev/null || true)"
     [ "$perm" = "700 ${VAULT_USER}" ] && ok "vault perms (${perm})" || note "vault perms are '${perm}', expected '700 ${VAULT_USER}'"
@@ -599,7 +742,16 @@ cmd_doctor() {
     if _is_api_host "$a"; then
       local kind; kind="$(conf_get "$f" PLATFORM)"
       if api_broker "$a" ping >/dev/null 2>&1; then
-        ok "reach ${a} (${kind} API, read-only)"
+        # Do not claim "read-only" for a platform where it is no longer true.
+        # UniFi and Firewalla cannot write at all; NetBird and Cloudflare can,
+        # and whether THIS alias may depends on the credential it holds.
+        if _api_is_readonly "$a"; then
+          ok "reach ${a} (${kind} API, read-only)"
+        elif [ "$(conf_get "$f" WRITE)" = "yes" ]; then
+          ok "reach ${a} (${kind} API, read/write - destructive ops need --force)"
+        else
+          ok "reach ${a} (${kind} API, read-only token)"
+        fi
         # Only a UniFi console is TLS-pinned, because only it presents a
         # self-signed certificate. A Firewalla is reached at its MSP domain,
         # which has a publicly trusted one, so ordinary CA verification already
@@ -645,11 +797,13 @@ cmd_add_host() {
   [ "$(id -u)" -eq 0 ] || sudo -v || die "add-host needs sudo (run from an admin shell, not the Claude UI)"
   # Platform is settled before the alias so a UniFi console can suggest a
   # sensible name and then skip every SSH question, which does not apply to it.
-  [ -n "$plat" ] || plat="$(ask 'Platform (linux/truenas/proxmox/unifi/firewalla)' linux)"
-  case "$plat" in linux|truenas|proxmox|unifi|firewalla) : ;; *) die "unknown platform: ${plat} (linux, truenas, proxmox, unifi, firewalla)" ;; esac
+  [ -n "$plat" ] || plat="$(ask 'Platform (linux/truenas/proxmox/unifi/firewalla/netbird/cloudflare)' linux)"
+  case "$plat" in linux|truenas|proxmox|unifi|firewalla|netbird|cloudflare) : ;; *) die "unknown platform: ${plat} (linux, truenas, proxmox, unifi, firewalla, netbird, cloudflare)" ;; esac
   if [ -z "$alias" ]; then
     case "$plat" in
       unifi|firewalla) alias="$(ask 'Alias (short name for your router)' router)" ;;
+      netbird)         alias="$(ask 'Alias (short name for your mesh)' mesh)" ;;
+      cloudflare)      alias="$(ask 'Alias (short name for your Cloudflare account)' cloudflare)" ;;
       *)               alias="$(ask 'Alias (short name, e.g. pve1)')" ;;
     esac
   fi
@@ -660,6 +814,15 @@ cmd_add_host() {
   if [ "$plat" = "firewalla" ]; then
     [ -n "$host" ] || host="$(ask 'Your Firewalla MSP domain (e.g. yourname.firewalla.net)')"
     _add_firewalla_host "$alias" "$host" "${port:-443}"; return
+  fi
+  # Cloudflare is always the same endpoint - there is nothing to ask, and asking
+  # would only invite an answer that cannot work.
+  if [ "$plat" = "cloudflare" ]; then
+    _add_cloudflare_host "$alias" "api.cloudflare.com" "${port:-443}"; return
+  fi
+  if [ "$plat" = "netbird" ]; then
+    [ -n "$host" ] || host="$(ask 'NetBird management host (leave as-is for NetBird Cloud)' api.netbird.io)"
+    _add_netbird_host "$alias" "$host" "${port:-443}"; return
   fi
   [ -n "$host" ] || host="$(ask 'IP or hostname')"
   if [ "$plat" = "unifi" ]; then _add_unifi_host "$alias" "$host" "${port:-443}"; return; fi
@@ -744,7 +907,7 @@ EOF
   # verifies against this, which is what stops the key being handed to an
   # impostor on the network later.
   echo "Pinning the console's TLS key..." >/dev/tty
-  pin="$(_unifi_pin "$host" "$port" || true)"
+  pin="$(_tls_pin "$host" "$port" || true)"
   [ -n "$pin" ] || echo "  (could not read the certificate; continuing unpinned)" >/dev/tty
 
   sudo tee "${REG_DIR}/${alias}.conf" >/dev/null <<EOF
@@ -861,6 +1024,198 @@ EOF
   fi
 }
 
+# Register a NetBird mesh. Operator-only and shell-only, for the same reason the
+# UniFi and Firewalla paths are: the token is a secret being typed, and a secret
+# typed into an LLM session has already been seen by the LLM.
+_add_netbird_host() {
+  local alias="$1" host="$2" port="$3" cred="${1}.token" token pin write
+  # People paste a URL out of the browser bar. Take the host out of it rather
+  # than storing something that will never resolve.
+  host="${host#https://}"; host="${host#http://}"; host="${host%%/*}"
+  cat >/dev/tty <<EOF
+
+Registering ${host} as your NetBird mesh.
+
+HomelabHero reads the mesh from NetBird's management API rather than from any
+one peer, which is what lets it still answer when a peer is down. That needs a
+token, and NetBird's own answer for this is a SERVICE USER - a non-interactive
+account made for exactly this purpose:
+
+  1. Sign in to NetBird (https://app.netbird.io for Cloud).
+  2. Team -> Service Users -> create one, named something like "homelabhero".
+  3. Pick its role. This is the important choice:
+
+       User   - READ-ONLY. Everything HomelabHero reports still works.
+       Admin  - can also change the mesh: approve peers, move them between
+                groups, enable and disable policies, remove peers.
+
+  4. Open that service user and create a token. Copy it - NetBird stores only a
+     hash, so this is the one time you can see it.
+
+  Pick User unless you actually want Claude able to change the mesh. If you pick
+  Admin, know what that buys and what it costs: the write ops become available,
+  and every read then runs with a credential that could have written. The broker
+  is what keeps that in check - it has no generic write path, only named ops, and
+  anything destructive refuses without --force - but with an Admin token that
+  fencing is the only lock, not the second one.
+
+  The token is stored in the vault, readable only by the ${VAULT_USER} user, and
+  is never shown to Claude.
+
+EOF
+  token="$(asksecret "NetBird token for ${host}")"
+  [ -n "$token" ] || die "no token entered"
+  printf '%s' "$token" | sudo -u "$VAULT_USER" tee "${VAULT_DIR}/${cred}" >/dev/null
+  sudo -u "$VAULT_USER" chmod 600 "${VAULT_DIR}/${cred}"
+  unset token
+
+  # Record what the token can do rather than discovering it from a 403 later.
+  # NetBird has no endpoint that reliably reports a service user's own role to
+  # itself, so this is asked rather than probed - and asked in terms of the
+  # choice just made, not in terms of an API concept.
+  if [ "$(ask 'Did you give that service user the Admin role (so HomelabHero may change the mesh)? (y/N)' N)" = "y" ]; then
+    write="yes"
+  else
+    write="no"
+  fi
+
+  # NetBird Cloud has a publicly trusted certificate and needs no pin. A
+  # self-hosted server usually presents its own, so try ordinary verification
+  # first and pin ONLY if that is what is standing in the way - a pin recorded
+  # when CA verification would have worked is a maintenance burden with no gain.
+  # Probe with ordinary CA verification and read the EXIT STATUS, not the HTTP
+  # status: an unauthenticated 401 means the certificate was fine and only the
+  # credential was missing, which is exactly what we want to see. curl's 35/51/60
+  # are the TLS failures, and they are the only reason to reach for a pin.
+  pin=""
+  if [ "$host" != "api.netbird.io" ]; then
+    local rc=0
+    curl -sS -m 10 -o /dev/null "https://${host}:${port}/api/peers" >/dev/null 2>&1 || rc=$?
+    case "$rc" in
+      35|51|60)
+        echo "This server's certificate is not publicly trusted; pinning its key instead..." >/dev/tty
+        pin="$(_tls_pin "$host" "$port" || true)"
+        [ -n "$pin" ] || echo "  (could not read the certificate; continuing unpinned)" >/dev/tty ;;
+    esac
+  fi
+
+  sudo tee "${REG_DIR}/${alias}.conf" >/dev/null <<EOF
+# HomelabHero host registry entry (non-secret)
+PLATFORM=netbird
+HOST=${host}
+PORT=${port}
+USER=service-user
+AUTH=token
+CRED=${cred}
+WRITE=${write}
+PIN=${pin}
+EOF
+  sudo chmod 644 "${REG_DIR}/${alias}.conf"
+
+  echo >/dev/tty
+  if [ "$write" = "yes" ]; then
+    echo "Registered '${alias}'. This token can CHANGE the mesh; destructive ops still need --force." >/dev/tty
+  else
+    echo "Registered '${alias}'. This token is read-only." >/dev/tty
+  fi
+  echo "Testing..." >/dev/tty
+  if cmd_test "$alias"; then
+    echo >/dev/tty
+    netbird_broker summary "$alias" 2>&1 | sed 's/^/  /' >/dev/tty || true
+  else
+    cat >/dev/tty <<EOF
+
+The token did not work. Nothing is broken; the registration is saved but
+unusable. NetBird tokens are created with an expiry, so check it has not lapsed,
+and that you copied the whole thing, then replace it:
+
+    hh rm-host ${alias}
+    hh add-netbird
+EOF
+  fi
+}
+
+# Register a Cloudflare account. Operator-only and shell-only, same reasoning.
+_add_cloudflare_host() {
+  local alias="$1" host="$2" port="$3" cred="${1}.token" token write
+  cat >/dev/tty <<EOF
+
+Registering your Cloudflare account.
+
+HomelabHero reads Cloudflare's own view of your DNS and tunnels, which is the
+view that stays answerable when the host running cloudflared is not. That needs
+a CUSTOM API TOKEN - never the Global API Key, which cannot be scoped and would
+put full account control in the vault.
+
+  Create it at: My Profile -> API Tokens -> Create Token -> Custom token
+
+  For READ-ONLY (everything HomelabHero reports still works):
+      Account | Cloudflare Tunnel          | Read
+      Account | Access: Apps and Policies  | Read
+      Zone    | Zone                       | Read
+      Zone    | DNS                        | Read
+
+  To also let HomelabHero CHANGE things, use Edit instead of Read for
+  Cloudflare Tunnel and DNS. That enables: dns-set, dns-proxy, dns-delete,
+  tunnel-route, tunnel-unroute, purge and access-revoke.
+
+  Under "Zone Resources", prefer "Include -> Specific zone" and name only the
+  domains your homelab uses. A token scoped to one zone cannot touch another
+  even if something ever reached it outside this broker.
+
+  Grant Read unless you actually want Claude able to change your DNS. DNS is
+  cached far and wide, so a wrong change outlives the moment it was made.
+
+  The token is stored in the vault, readable only by the ${VAULT_USER} user, and
+  is never shown to Claude.
+
+EOF
+  token="$(asksecret "Cloudflare API token")"
+  [ -n "$token" ] || die "no token entered"
+  printf '%s' "$token" | sudo -u "$VAULT_USER" tee "${VAULT_DIR}/${cred}" >/dev/null
+  sudo -u "$VAULT_USER" chmod 600 "${VAULT_DIR}/${cred}"
+  unset token
+
+  if [ "$(ask 'Did you grant Edit permissions (so HomelabHero may change DNS and tunnels)? (y/N)' N)" = "y" ]; then
+    write="yes"
+  else
+    write="no"
+  fi
+
+  # No TLS pin: api.cloudflare.com is a public host with a publicly trusted
+  # certificate, and ordinary CA verification is the stronger check.
+  sudo tee "${REG_DIR}/${alias}.conf" >/dev/null <<EOF
+# HomelabHero host registry entry (non-secret)
+PLATFORM=cloudflare
+HOST=${host}
+PORT=${port}
+USER=api-token
+AUTH=token
+CRED=${cred}
+WRITE=${write}
+EOF
+  sudo chmod 644 "${REG_DIR}/${alias}.conf"
+
+  echo >/dev/tty; echo "Registered '${alias}'. Testing..." >/dev/tty
+  if cmd_test "$alias"; then
+    # Resolve and cache the account id so the first real command is not slower
+    # than every one after it.
+    cloudflare_broker zones "$alias" >/dev/null 2>&1 || true
+    echo >/dev/tty
+    cloudflare_broker summary "$alias" 2>&1 | sed 's/^/  /' >/dev/tty || true
+  else
+    cat >/dev/tty <<EOF
+
+The token did not work. Nothing is broken; the registration is saved but
+unusable. Check that you copied the whole token and that it has at least the
+Read permissions listed above, then replace it:
+
+    hh rm-host ${alias}
+    hh add-cloudflare
+EOF
+  fi
+}
+
 # Pin the alias to ONE box.
 #
 # An MSP token is scoped to an account, not to a box, so without this an alias
@@ -914,6 +1269,16 @@ cmd_add_firewalla() {
   cmd_add_host --platform firewalla "$@"
 }
 
+cmd_add_netbird() {
+  [ "$(id -u)" -eq 0 ] || sudo -v || die "add-netbird needs sudo (run from an admin shell, not the Claude UI)"
+  cmd_add_host --platform netbird "$@"
+}
+
+cmd_add_cloudflare() {
+  [ "$(id -u)" -eq 0 ] || sudo -v || die "add-cloudflare needs sudo (run from an admin shell, not the Claude UI)"
+  cmd_add_host --platform cloudflare "$@"
+}
+
 cmd_add_unifi() {
   [ "$(id -u)" -eq 0 ] || sudo -v || die "add-unifi needs sudo (run from an admin shell, not the Claude UI)"
   cmd_add_host --platform unifi "$@"
@@ -927,6 +1292,21 @@ cmd_repin() {
   [ "$#" -eq 1 ] || die "usage: hh repin <alias>"
   local alias="$1" f="${REG_DIR}/$1.conf"
   [ -f "$f" ] || die "no such host"
+  if _is_netbird "$alias"; then
+    [ -n "$(conf_get "$f" PIN)" ] || die "'${alias}' is not TLS-pinned: its management server has a publicly
+    trusted certificate, so ordinary verification covers it and there is no pin
+    to refresh."
+    [ "$(id -u)" -eq 0 ] || sudo -v || die "repin needs sudo (run from an admin shell, not the Claude UI)"
+    local nhost nport npin
+    nhost="$(conf_get "$f" HOST)"; nport="$(conf_get "$f" PORT)"
+    npin="$(_tls_pin "$nhost" "${nport:-443}" || true)"
+    [ -n "$npin" ] || die "could not read a certificate from ${nhost}:${nport}"
+    sudo sed -i "/^PIN=/d" "$f"
+    printf 'PIN=%s\n' "$npin" | sudo tee -a "$f" >/dev/null
+    echo "Re-pinned ${alias} (${nhost})."
+    cmd_test "$alias"
+    return
+  fi
   if ! _is_unifi "$alias"; then
     if _is_firewalla "$alias"; then
       die "'${alias}' is a Firewalla, which has no TLS pin to refresh: it is reached at
@@ -934,13 +1314,18 @@ cmd_repin() {
     WHICH BOX this alias reads, re-register it and pick again:
         hh rm-host ${alias} && hh add-firewalla"
     fi
-    die "'${alias}' is not a UniFi console. Only a UniFi console is TLS-pinned,
-    because only it presents a self-signed certificate."
+    if _is_cloudflare "$alias"; then
+      die "'${alias}' is a Cloudflare account, reached at api.cloudflare.com with a
+    publicly trusted certificate. There is no pin to refresh."
+    fi
+    die "'${alias}' has no TLS pin to refresh. Pinning applies to a UniFi console,
+    and to a self-hosted NetBird server presenting its own certificate; anything
+    reached at a public endpoint is covered by ordinary CA verification."
   fi
   [ "$(id -u)" -eq 0 ] || sudo -v || die "repin needs sudo (run from an admin shell, not the Claude UI)"
   local host port pin
   host="$(conf_get "$f" HOST)"; port="$(conf_get "$f" PORT)"
-  pin="$(_unifi_pin "$host" "${port:-443}" || true)"
+  pin="$(_tls_pin "$host" "${port:-443}" || true)"
   [ -n "$pin" ] || die "could not read a certificate from ${host}:${port}"
   sudo sed -i "/^PIN=/d" "$f"
   printf 'PIN=%s\n' "$pin" | sudo tee -a "$f" >/dev/null
@@ -1003,11 +1388,15 @@ main() {
     scan)      cmd_scan "$@" ;;
     unifi)     cmd_unifi "$@" ;;
     firewalla) cmd_firewalla "$@" ;;
+    netbird)   cmd_netbird "$@" ;;
+    cloudflare|cf) cmd_cloudflare "$@" ;;
     doctor)    cmd_doctor "$@" ;;
     provision) cmd_provision "$@" ;;
     add-host)  cmd_add_host "$@" ;;
     add-unifi) cmd_add_unifi "$@" ;;
     add-firewalla) cmd_add_firewalla "$@" ;;
+    add-netbird)   cmd_add_netbird "$@" ;;
+    add-cloudflare) cmd_add_cloudflare "$@" ;;
     repin)     cmd_repin "$@" ;;
     rm-host)   cmd_rm_host "$@" ;;
     update)    cmd_update "$@" ;;

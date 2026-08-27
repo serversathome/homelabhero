@@ -35,7 +35,7 @@ else
   git clone --depth 1 --branch "$HH_BRANCH" "$HH_REPO" "$CLONE_DIR"
 fi
 
-chmod +x "$CLONE_DIR/setup/main.sh" "$CLONE_DIR/bin/hh" "$CLONE_DIR/bin/hh-connect" 2>/dev/null || true
+chmod +x "$CLONE_DIR"/setup/main.sh "$CLONE_DIR"/bin/hh "$CLONE_DIR"/bin/hh-* 2>/dev/null || true
 
 info "Starting setup..."
 # Run setup with the terminal attached so its prompts work under curl | bash.

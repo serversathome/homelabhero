@@ -1,0 +1,1074 @@
+#!/usr/bin/env bash
+#
+# hh-netbird - HomelabHero NetBird API broker.
+#
+# The mesh sibling of hh-unifi and hh-firewalla. It runs as the vault user
+# (hhvault) through the same narrow sudoers rule, reads a NetBird service-user
+# token the agent user cannot read, and talks to the NetBird management API on
+# the operator's behalf. It never prints, echoes, or returns the token.
+#
+# WHAT THIS CLOSES. Until now HomelabHero could only see the mesh from inside
+# one peer - `hh run <alias> "netbird status"` - which is one peer's opinion,
+# and is unavailable exactly when you need it most, because the host you would
+# ask is the host that is down. This broker asks the control plane instead, so
+# the mesh stays legible when a member of it is not.
+#
+# READ AND WRITE, DELIBERATELY. This is the first HomelabHero broker that can
+# change something, and that is a decision, not an oversight. A router is the
+# one device whose failure takes away the access you would need to fix it, so
+# hh-unifi and hh-firewalla are read-only by construction and stay that way. An
+# overlay network is different in kind: adding a peer to a group or approving a
+# host is routine, reversible, and done far more often than it is done wrong,
+# and the mesh going down does not cost you the LAN. So writes live here, and
+# they are fenced rather than forbidden:
+#
+#   * THE VERB IS NEVER DERIVED FROM INPUT. Reads go through _read, which
+#     hardcodes -X GET and cannot express anything else. Writes go through
+#     _post/_put/_delete, each of which hardcodes its own verb and passes it as
+#     a literal to _write; _write re-checks it against a literal allowlist and
+#     refuses anything else. No function in this file accepts a method as an
+#     argument, and no op forwards one.
+#   * THERE IS NO GENERIC WRITE ESCAPE HATCH. The read side has `get`, which can
+#     reach any endpoint the API has, because a GET it did not anticipate is
+#     still only a GET. The write side deliberately has NO `post`, `put`, or
+#     `delete` equivalent: every write is a named op with a hardcoded path and a
+#     body this file builds itself with jq. An endpoint nobody wrote an op for
+#     cannot be written to, which means a prompt injection cannot compose one.
+#   * DESTRUCTIVE OPS NEED --force. Anything that removes something, revokes
+#     something, or touches THIS machine's own peer refuses to run without it,
+#     and the refusal prints exactly what it would have done. That refusal is
+#     the confirmation step: an agent has to come back to you with the change
+#     spelled out before it can be repeated with --force.
+#
+# ONE CREDENTIAL, AND WHAT THAT COSTS. HomelabHero registers a NetBird SERVICE
+# USER - a non-interactive account made for exactly this - and a token minted
+# under it. NetBird offers two roles: User is read-only, Admin can write. A
+# single Admin token backs both the read and the write ops here, which is the
+# simpler thing to hold and rotate, and the honest cost is that every read now
+# runs with a credential that could have written. That makes the fencing above
+# the only lock on the read path, the way it already is for Firewalla, rather
+# than the second lock UniFi enjoys.
+#
+# An alias registered with a read-only User-role token still works for every
+# read op. The registry records WRITE=no in that case and the write ops refuse
+# up front with a sentence you can act on, instead of letting you find out from
+# a 403 forty characters into a JSON error.
+#
+# WHERE THIS TALKS TO. NetBird Cloud is https://api.netbird.io, a public host
+# with a publicly trusted certificate, so ordinary CA verification applies and
+# there is nothing to pin. A self-hosted management server often presents its
+# own certificate instead, so PIN= is supported the way hh-unifi does it, and
+# is set at registration only when CA verification actually fails. Certificate
+# verification is never simply switched off.
+#
+# Usage: hh-netbird <op> <alias> [args...]
+#
+# Argument order is op-first (hh-connect is alias-first) for the same reason as
+# the other API brokers: the hh CLI passes it straight through, and Claude's
+# permission rules match on a command PREFIX, so op-first is what lets `hh
+# netbird peers` be allowed while `hh netbird rm-peer` still has to ask.
+#
+set -euo pipefail
+
+REG_DIR="/etc/homelabhero/hosts.d"
+VAULT_DIR="/etc/homelabhero/vault"
+AUDIT_LOG="/var/log/homelabhero-broker.log"
+NAME_RE='^[A-Za-z0-9._-]+$'
+TIMEOUT=20
+
+# Everything lives under /api on the management host.
+API="/api"
+
+die() { printf 'hh-netbird: %s\n' "$*" >&2; exit 2; }
+
+[ "$#" -ge 2 ] || die "usage: hh-netbird <op> <alias> [args...]"
+OP="$1"; ALIAS="$2"; shift 2
+
+[[ "$ALIAS" =~ $NAME_RE ]] || die "invalid alias"
+CONF="${REG_DIR}/${ALIAS}.conf"
+[ -f "$CONF" ] || die "no such registered host: ${ALIAS}"
+
+# Pull --force / --yes out of the argument list before any op sees it, so an op
+# never has to think about where in its own arguments the flag might have
+# landed. Everything else is passed through untouched.
+FORCE=0
+ARGS=()
+for a in "$@"; do
+  case "$a" in
+    --force|--yes) FORCE=1 ;;
+    *) ARGS+=("$a") ;;
+  esac
+done
+set -- ${ARGS[@]+"${ARGS[@]}"}
+# The command as typed, minus the flag, so a refusal can print the exact line to
+# run again rather than describing it.
+RETRY="hh netbird ${OP} ${ALIAS}${ARGS[0]+ ${ARGS[*]}}"
+
+# Parse the registry entry safely (no sourcing). Only known keys are accepted.
+# Split on the FIRST '=' by hand rather than with IFS='=', because a value is
+# allowed to contain one: a pinned public key is base64 and ends in '=' padding,
+# and IFS splitting silently eats that trailing character, which turns a valid
+# pin into one that can never match.
+HOST=""; PORT="443"; AUTH=""; CRED=""; PLATFORM=""; PIN=""; WRITE=""
+while IFS= read -r line || [ -n "$line" ]; do
+  case "$line" in ''|\#*) continue ;; *=*) : ;; *) continue ;; esac
+  key="${line%%=*}"; val="${line#*=}"
+  key="${key//[[:space:]]/}"
+  val="${val%\"}"; val="${val#\"}"; val="${val## }"; val="${val%% }"
+  case "$key" in
+    HOST)     HOST="$val" ;;
+    PORT)     PORT="$val" ;;
+    AUTH)     AUTH="$val" ;;
+    CRED)     CRED="$val" ;;
+    PLATFORM) PLATFORM="$val" ;;
+    PIN)      PIN="$val" ;;
+    WRITE)    WRITE="$val" ;;
+  esac
+done < "$CONF"
+
+[ "$PLATFORM" = "netbird" ] || die "'${ALIAS}' is not a NetBird host (PLATFORM=${PLATFORM:-none})"
+[ "$AUTH" = "token" ] || die "'${ALIAS}' is not a token host (AUTH=${AUTH:-none})"
+[ -n "$HOST" ] || die "registry entry missing HOST"
+[ -n "$CRED" ] || die "registry entry missing CRED"
+[[ "$PORT" =~ ^[0-9]+$ ]] || die "invalid PORT"
+[[ "$CRED" =~ $NAME_RE ]] || die "invalid credential reference"
+
+# Same rule as every other broker: never let it be turned inward on this
+# machine, which is where the vault lives.
+case "$HOST" in
+  127.*|::1|localhost|localhost.*) die "refusing loopback target" ;;
+esac
+
+CREDFILE="${VAULT_DIR}/${CRED}"
+[ -f "$CREDFILE" ] || die "credential not found in vault"
+case "$(readlink -f "$CREDFILE")" in
+  "${VAULT_DIR}/"*) : ;;
+  *) die "credential path escapes vault" ;;
+esac
+TOKEN="$(tr -d '\r\n' <"$CREDFILE")"
+[ -n "$TOKEN" ] || die "credential is empty"
+
+BASE="https://${HOST}:${PORT}"
+
+audit() { printf '%s\t%s\tNETBIRD %s\t%s\n' \
+  "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$ALIAS" "$HOST" "$*" \
+  >>"$AUDIT_LOG" 2>/dev/null || true; }
+
+# ---------------------------------------------------------------------------
+# HTTP
+#
+# _curl is the one place a request is actually issued. It is called only by
+# _read and _write, each of which supplies its own verb as a literal - see the
+# header. Everything shared between a read and a write (the token, the pin, the
+# error vocabulary) lives here so the two paths cannot drift apart.
+_curl() {
+  local -n _args="$1"; local path="$2"
+  # A NetBird Cloud endpoint has a publicly trusted certificate and needs
+  # nothing extra. A self-hosted management server may present its own, in
+  # which case registration recorded a pin; -k drops the CA and hostname checks
+  # that cannot succeed against it, and --pinnedpubkey - which curl checks
+  # independently of -k - is what actually authenticates the far end.
+  if [ -n "$PIN" ]; then _args+=(-k --pinnedpubkey "$PIN"); fi
+
+  local errf resp rc=0
+  errf="$(mktemp)"
+  # The token goes in through a curl config file on stdin, never argv and never
+  # the environment. /proc/<pid>/cmdline is world readable, so a token passed as
+  # -H "Authorization: ..." would be readable by the very agent user this broker
+  # exists to keep it away from. printf is a shell builtin, so it does not leak
+  # through a process of its own either.
+  resp="$(printf 'header = "Authorization: Token %s"\n' "$TOKEN" \
+    | curl -K - "${_args[@]}" "${BASE}${path}" 2>"$errf")" || rc=$?
+  local err; err="$(tr -d '\r' <"$errf")"; rm -f "$errf"
+
+  if [ "$rc" -ne 0 ]; then
+    case "$rc" in
+      6)  die "cannot resolve ${HOST}. For NetBird Cloud that should be
+    api.netbird.io; for a self-hosted install it is your management server.
+    Re-register with the right one: hh rm-host ${ALIAS} && hh add-netbird" ;;
+      28) die "timed out after ${TIMEOUT}s talking to ${HOST}" ;;
+      7)  die "cannot connect to ${HOST}:${PORT} (is the management server up?)" ;;
+      90) die "TLS public key pin does not match for ${HOST}.
+    The management server is presenting a different certificate than when it was
+    registered. That is expected after you renew or replace its certificate, and
+    it is what a machine-in-the-middle would also look like. If you changed it,
+    re-pin from an admin shell:
+        hh repin ${ALIAS}
+    If you did not, treat it as suspicious and revoke the token in NetBird." ;;
+      35|51|60) die "TLS verification failed for ${HOST}: ${err:-no detail}
+    If this is NetBird Cloud, suspect the network path (a filtering proxy or
+    interception) before the endpoint, and do not work around it by disabling
+    verification. If this is a self-hosted server with its own certificate,
+    register it again so its key can be pinned:
+        hh rm-host ${ALIAS} && hh add-netbird" ;;
+      *)  die "request failed (curl ${rc}): ${err:-no detail}" ;;
+    esac
+  fi
+
+  local code="${resp##*$'\n'}" out="${resp%$'\n'*}"
+  case "$code" in
+    2*) printf '%s' "$out" ;;
+    401|403) die "the NetBird token was rejected (HTTP ${code}). If this used to work,
+    the token may have expired - NetBird tokens are created with an expiry.
+    Create a new one under the same service user (Team -> Service Users -> your
+    user -> create token), then re-register from an admin shell:
+        hh rm-host ${ALIAS} && hh add-netbird
+    If the op you ran was a write, check the service user has the Admin role;
+    the User role is read-only and cannot make changes." ;;
+    402) die "this endpoint needs a NetBird plan you are not on (HTTP 402)" ;;
+    404) die "no such API path on this management server (HTTP 404): ${path}" ;;
+    422) die "NetBird rejected the request body (HTTP 422): $(printf '%s' "$out" | tr -d '\n' | cut -c1-200)" ;;
+    429) die "rate limited by NetBird (HTTP 429); retry in a moment.
+    NetBird Cloud allows 120 requests a minute." ;;
+    *)   die "HTTP ${code} from ${path}: $(printf '%s' "$out" | tr -d '\n' | cut -c1-200)" ;;
+  esac
+}
+
+# Perform one GET and print the response body.
+#
+# Extra arguments are query parameters as name=value, URL-encoded by curl and
+# appended with --get, which is what keeps them a query string rather than a
+# request body. There is deliberately no method argument: a function that
+# cannot express a write is a guarantee, where a comment saying it will not
+# write is only a request.
+_read() {
+  local path="$1"; shift
+  local args=(-sS -m "$TIMEOUT" --get -X GET -H 'Accept: application/json' -w '\n%{http_code}')
+  local kv
+  for kv in "$@"; do args+=(--data-urlencode "$kv"); done
+  _curl args "$path"
+}
+
+# Refuse a write before it leaves this machine when the registered credential
+# is known not to be able to make one. NetBird would answer 403 anyway; saying
+# it here means the reason is a sentence rather than a status code.
+_require_write() {
+  case "$WRITE" in
+    yes) : ;;
+    no)  die "'${ALIAS}' is registered with a READ-ONLY NetBird token, so it cannot
+    make changes. Its service user has the User role; writing needs Admin.
+    Either change that service user's role in NetBird (Team -> Service Users)
+    and re-register, or register the admin token as a second alias:
+        hh rm-host ${ALIAS} && hh add-netbird" ;;
+    *)   die "'${ALIAS}' does not record whether its token can write (WRITE= is unset).
+    Re-register it so that is settled rather than guessed:
+        hh rm-host ${ALIAS} && hh add-netbird" ;;
+  esac
+}
+
+# Perform one write. The method arrives as a literal from one of the three
+# wrappers below and is re-checked here against a literal allowlist, so a value
+# that came from anywhere else cannot get through even if a future edit
+# accidentally routes one in. $3, when present, is a JSON body built by jq.
+_write() {
+  local method="$1" path="$2" body="${3:-}"
+  case "$method" in
+    POST|PUT|DELETE) : ;;
+    *) die "internal error: refusing method '${method}'" ;;
+  esac
+  _require_write
+  local args=(-sS -m "$TIMEOUT" -X "$method" -H 'Accept: application/json' -w '\n%{http_code}')
+  if [ -n "$body" ]; then
+    args+=(-H 'Content-Type: application/json' --data-binary "$body")
+  fi
+  _curl args "$path"
+}
+
+_post()   { _write POST   "$@"; }
+_put()    { _write PUT    "$@"; }
+_delete() { _write DELETE "$@"; }
+
+# Guard against a silently empty section. A response that is not the shape we
+# expect is reported as such rather than printed as "nothing found", because
+# those two look identical to a reader and only one of them is true.
+_expect_array() {
+  printf '%s' "$1" | jq -e 'type == "array"' >/dev/null 2>&1 && return 0
+  die "unexpected response from ${2}: $(printf '%s' "$1" | tr -d '\n' | cut -c1-160)"
+}
+_expect_object() {
+  printf '%s' "$1" | jq -e 'type == "object"' >/dev/null 2>&1 && return 0
+  die "unexpected response from ${2}: $(printf '%s' "$1" | tr -d '\n' | cut -c1-160)"
+}
+
+# Shared jq helpers: human-readable bytes, and a relative "how long ago" for the
+# RFC3339 timestamps NetBird returns. A peer that has been quiet for six weeks
+# and one quiet for six minutes are very different facts, and an ISO string
+# makes the reader do that subtraction themselves.
+JQ_FMT='
+def hb: if . == null then "-"
+        elif . >= 1073741824 then "\((. / 1073741824 * 10 | floor) / 10) GB"
+        elif . >= 1048576 then "\((. / 1048576 * 10 | floor) / 10) MB"
+        elif . >= 1024 then "\((. / 1024 | floor)) KB"
+        else "\(.) B" end;
+def ago: if . == null or . == "" then "-"
+         else (try ((now - (. | sub("\\.[0-9]+"; "") | fromdateiso8601)) | floor) catch null) as $s
+              | if $s == null then "-"
+                # A negative age is a timestamp in the FUTURE, which is normal for
+                # the one place this is used on an expiry rather than a last-seen.
+                # Rendering that as "just now" would report a key with four months
+                # left on it as one that just lapsed.
+                elif $s < -86400 then "in \((($s / -86400)) | floor)d"
+                elif $s < -3600 then "in \((($s / -3600)) | floor)h"
+                elif $s < 0 then "in \((($s / -60)) | floor)m"
+                elif $s < 90 then "just now"
+                elif $s < 5400 then "\(($s / 60) | floor)m ago"
+                elif $s < 172800 then "\(($s / 3600) | floor)h ago"
+                else "\(($s / 86400) | floor)d ago" end end;
+'
+
+# The number of rows an op should return. Guards against a typo turning into an
+# unbounded page, which matters more here than elsewhere because the audit
+# event endpoint has no pagination at all and will hand back everything.
+_limit() {
+  local n="${1:-$2}"
+  [[ "$n" =~ ^[0-9]+$ ]] || die "expected a number of rows, got: ${n}"
+  [ "$n" -ge 1 ] || die "row count must be at least 1"
+  [ "$n" -le 1000 ] || die "row count must be 1000 or less"
+  printf '%s' "$n"
+}
+
+# ---------------------------------------------------------------------------
+# Resolving what a name means
+#
+# Every write op names its target the way a person would - "the printer", an IP,
+# a peer id - and resolution has to be exact before anything is changed. These
+# helpers therefore REFUSE an ambiguous match rather than taking the first one:
+# picking a plausible wrong peer is the failure mode that matters here, and it
+# is silent. A read op that guesses wrong prints the wrong table; a write op
+# that guesses wrong deletes the wrong host.
+
+# Cache the peer list. Several ops resolve two things (a peer and a group) and
+# the summary reads it more than once; NetBird Cloud allows 120 requests a
+# minute and there is no reason to spend them twice on the same answer.
+_PEERS_JSON=""
+_peers() {
+  if [ -z "$_PEERS_JSON" ]; then
+    _PEERS_JSON="$(_read "${API}/peers")"
+    _expect_array "$_PEERS_JSON" "${API}/peers"
+  fi
+  printf '%s' "$_PEERS_JSON"
+}
+
+# One peer, matched on id, exact IP, exact name or hostname, and finally a
+# case-insensitive substring of the name. Ordered most to least precise, and it
+# stops at the first tier that matches anything, so an exact name is never
+# beaten by something else that merely contains it.
+_resolve_peer() {
+  local q="$1" all hits n
+  all="$(_peers)"
+  hits="$(printf '%s' "$all" | jq --arg q "$q" '
+    ([ .[] | select((.id // "") == $q or (.ip // "") == $q) ]) as $exact
+    | ([ .[] | select(((.name // "") | ascii_downcase) == ($q | ascii_downcase)
+                   or ((.hostname // "") | ascii_downcase) == ($q | ascii_downcase)) ]) as $named
+    | ([ .[] | select(((.name // "") | ascii_downcase) | contains($q | ascii_downcase)) ]) as $fuzzy
+    | if ($exact | length) > 0 then $exact
+      elif ($named | length) > 0 then $named
+      else $fuzzy end')"
+  n="$(printf '%s' "$hits" | jq -r 'length')"
+  case "$n" in
+    0) die "no peer matches '${q}' (list them with: hh netbird peers ${ALIAS})" ;;
+    1) printf '%s' "$hits" | jq -c '.[0]' ;;
+    *) die "'${q}' matches ${n} peers, and this needs exactly one. Name it precisely:
+$(printf '%s' "$hits" | jq -r '.[] | "        \(.name // "?")  \(.ip // "-")  \(.id // "-")"')" ;;
+  esac
+}
+
+# Same discipline for groups and policies: exact id or name first, substring
+# only as a fallback, and never more than one result.
+_resolve_one() {
+  local q="$1" all what hits n
+  all="$2"; what="$3"
+  hits="$(printf '%s' "$all" | jq --arg q "$q" '
+    ([ .[] | select((.id // "") == $q or ((.name // "") | ascii_downcase) == ($q | ascii_downcase)) ]) as $exact
+    | ([ .[] | select(((.name // "") | ascii_downcase) | contains($q | ascii_downcase)) ]) as $fuzzy
+    | if ($exact | length) > 0 then $exact else $fuzzy end')"
+  n="$(printf '%s' "$hits" | jq -r 'length')"
+  case "$n" in
+    0) die "no ${what} matches '${q}'" ;;
+    1) printf '%s' "$hits" | jq -c '.[0]' ;;
+    *) die "'${q}' matches ${n} ${what}s, and this needs exactly one. Name it precisely:
+$(printf '%s' "$hits" | jq -r '.[] | "        \(.name // "?")  \(.id // "-")"')" ;;
+  esac
+}
+
+_resolve_group() {
+  local all; all="$(_read "${API}/groups")"; _expect_array "$all" "${API}/groups"
+  _resolve_one "$1" "$all" "group"
+}
+_resolve_policy() {
+  local all; all="$(_read "${API}/policies")"; _expect_array "$all" "${API}/policies"
+  _resolve_one "$1" "$all" "policy"
+}
+
+# ---------------------------------------------------------------------------
+# Guards
+#
+# Which addresses belong to THIS machine. Used to recognise the command
+# center's own peer, which is the one peer whose removal costs you the mesh you
+# would have used to put it back.
+_LOCAL_IPS=""
+_local_ips() {
+  if [ -z "$_LOCAL_IPS" ]; then
+    _LOCAL_IPS="$(ip -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | sort -u | tr '\n' ' ')"
+    # Never empty, so a box without `ip` does not silently disable the guard by
+    # matching nothing. A single space is a value that matches no address.
+    [ -n "$_LOCAL_IPS" ] || _LOCAL_IPS=" "
+  fi
+  printf '%s' "$_LOCAL_IPS"
+}
+
+# Is this peer object the command center itself?
+_is_self_peer() {
+  local ip; ip="$(printf '%s' "$1" | jq -r '.ip // empty')"
+  [ -n "$ip" ] || return 1
+  case " $(_local_ips) " in *" ${ip} "*) return 0 ;; esac
+  return 1
+}
+
+# The confirmation step for anything destructive.
+#
+# This does not prompt. The broker is normally reached through sudo from a
+# non-interactive agent session, where there is no terminal to answer a y/N and
+# a prompt would simply hang or be auto-answered. So instead it REFUSES, and
+# prints the exact change it was asked to make. That refusal is what an agent
+# has to bring back to you, in your words, before it can run the same command
+# again with --force - which makes the confirmation happen where a person
+# actually is, rather than inside a pipe.
+_confirm() {
+  local what="$1"
+  [ "$FORCE" -eq 1 ] && return 0
+  die "this would ${what}
+
+    That is destructive, so it will not run without you saying so explicitly.
+    If that is what you want, run the same command again with --force:
+
+        ${RETRY} --force"
+}
+
+# The same gate, for a change aimed at this machine's own peer. Separate from
+# _confirm because the reason is different and worth spelling out: the risk is
+# not that the change is hard to undo, it is that it removes the path you would
+# undo it over.
+_confirm_self() {
+  local what="$1"
+  [ "$FORCE" -eq 1 ] && return 0
+  die "'${2}' is THIS machine's own peer, and this would ${what}
+
+    Doing that disconnects the command center from the mesh, which is also how
+    it reaches most of your homelab - including, quite possibly, the way you are
+    reading this. Nothing here can put it back for you afterwards.
+
+    If you are certain, run the same command again with --force:
+
+        ${RETRY} --force"
+}
+
+# ---------------------------------------------------------------------------
+# Read ops
+
+op_info() { _read "${API}/accounts"; }
+
+op_ping() {
+  local j n
+  j="$(_read "${API}/peers")"
+  _expect_array "$j" "${API}/peers"
+  n="$(printf '%s' "$j" | jq -r 'length')"
+  printf 'netbird-ok %s (%s peers, %s connected, token can %s)\n' "$HOST" "$n" \
+    "$(printf '%s' "$j" | jq -r '[.[] | select(.connected)] | length')" \
+    "$(if [ "$WRITE" = "yes" ]; then echo write; else echo read; fi)"
+}
+
+op_peers() {
+  local j; j="$(_peers)"
+  printf '%s' "$j" | jq -r "${JQ_FMT}"'
+    .[] | "\(.name // .hostname // "?")\t\(.ip // "-")\t\(if .connected then "connected" else "OFFLINE" end)\t\(.last_seen | ago)\t\(.os // "-")\t\(.version // "-")\t\([(.groups // [])[] | .name] | join(","))\t\(if .approval_required then "NEEDS APPROVAL" else "" end)"' \
+    | sort -t"$(printf '\t')" -k3,3 -k1,1 \
+    | awk -F'\t' 'BEGIN{printf "%-26s %-15s %-10s %-10s %-22s %-9s %-24s %s\n","NAME","IP","STATE","LAST SEEN","OS","VERSION","GROUPS","NOTE"}
+                  {printf "%-26s %-15s %-10s %-10s %-22s %-9s %-24s %s\n",$1,$2,$3,$4,$5,$6,$7,$8}'
+}
+
+op_peer() {
+  [ "$#" -ge 1 ] || die "usage: hh netbird peer [alias] <name-or-ip-or-id>"
+  _resolve_peer "$1" | jq '.'
+}
+
+op_groups() {
+  local j; j="$(_read "${API}/groups")"
+  _expect_array "$j" "${API}/groups"
+  printf '%s' "$j" | jq -r '.[] |
+      "\(.name // "?")\t\(.id // "-")\t\((.peers // []) | length)\t\((.resources // []) | length)\t\(if .issued then .issued else "-" end)"' \
+    | awk -F'\t' 'BEGIN{printf "%-28s %-22s %6s %10s  %s\n","GROUP","ID","PEERS","RESOURCES","ISSUED BY"}
+                  {printf "%-28s %-22s %6s %10s  %s\n",$1,$2,$3,$4,$5}'
+}
+
+# Networks replaced Routes, which NetBird now marks deprecated. Reading the
+# routers separately is what answers "is my routing peer up", and it is one
+# call across every network rather than one per network.
+op_networks() {
+  local j; j="$(_read "${API}/networks")"
+  _expect_array "$j" "${API}/networks"
+  printf '%s' "$j" | jq -r '.[] |
+      "\(.name // "?")\t\(.id // "-")\t\(.routing_peers_count // 0)\t\((.resources // []) | length)\t\((.policies // []) | length)\t\((.description // "") | gsub("\\s+"; " "))"' \
+    | awk -F'\t' 'BEGIN{printf "%-24s %-22s %8s %10s %9s  %s\n","NETWORK","ID","ROUTERS","RESOURCES","POLICIES","DESCRIPTION"}
+                  {printf "%-24s %-22s %8s %10s %9s  %s\n",$1,$2,$3,$4,$5,$6}'
+}
+
+op_routers() {
+  local j; j="$(_read "${API}/networks/routers")"
+  _expect_array "$j" "${API}/networks/routers"
+  if [ "$(printf '%s' "$j" | jq -r 'length')" -eq 0 ]; then
+    echo "No network routers configured."
+    return 0
+  fi
+  printf '%s' "$j" | jq -r '.[] |
+      "\(.id // "-")\t\(.peer // ([(.peer_groups // [])[]] | join(",")) // "-")\t\(.metric // "-")\t\(if .masquerade then "yes" else "no" end)\t\(if .enabled then "enabled" else "DISABLED" end)"' \
+    | awk -F'\t' 'BEGIN{printf "%-22s %-26s %8s %12s  %s\n","ROUTER","PEER / PEER GROUPS","METRIC","MASQUERADE","STATE"}
+                  {printf "%-22s %-26s %8s %12s  %s\n",$1,$2,$3,$4,$5}'
+}
+
+op_resources() {
+  [ "$#" -ge 1 ] || die "usage: hh netbird resources [alias] <network>"
+  local net id j
+  net="$(_resolve_one "$1" "$(_read "${API}/networks")" "network")"
+  id="$(printf '%s' "$net" | jq -r '.id')"
+  j="$(_read "${API}/networks/${id}/resources")"
+  _expect_array "$j" "${API}/networks/${id}/resources"
+  printf '%s' "$j" | jq -r '.[] |
+      "\(.name // "?")\t\(.type // "-")\t\(.address // "-")\t\(if .enabled then "enabled" else "DISABLED" end)\t\([(.groups // [])[] | .name] | join(","))"' \
+    | awk -F'\t' 'BEGIN{printf "%-26s %-10s %-30s %-10s %s\n","RESOURCE","TYPE","ADDRESS","STATE","GROUPS"}
+                  {printf "%-26s %-10s %-30s %-10s %s\n",$1,$2,$3,$4,$5}'
+}
+
+op_policies() {
+  local j; j="$(_read "${API}/policies")"
+  _expect_array "$j" "${API}/policies"
+  printf '%s' "$j" | jq -r '.[] | . as $p | (.rules // [{}])[] |
+      "\($p.name // "?")\t\(if $p.enabled then "enabled" else "DISABLED" end)\t\(.action // "-")\t\(.protocol // "-")\t\([(.sources // [])[] | .name] | join(",") | if . == "" then "-" else . end)\t\([(.destinations // [])[] | .name] | join(",") | if . == "" then "-" else . end)\t\(if .bidirectional then "<->" else "->" end)\t\([(.ports // [])[]] | join(",") | if . == "" then "any" else . end)"' \
+    | awk -F'\t' 'BEGIN{printf "%-24s %-9s %-7s %-6s %-20s %-20s %-4s %s\n","POLICY","STATE","ACTION","PROTO","SOURCES","DESTINATIONS","DIR","PORTS"}
+                  {printf "%-24s %-9s %-7s %-6s %-20s %-20s %-4s %s\n",$1,$2,$3,$4,$5,$6,$7,$8}'
+}
+
+op_policy() {
+  [ "$#" -ge 1 ] || die "usage: hh netbird policy-show [alias] <name-or-id>"
+  _resolve_policy "$1" | jq '.'
+}
+
+op_dns() {
+  local ns st
+  ns="$(_read "${API}/dns/nameservers")"
+  _expect_array "$ns" "${API}/dns/nameservers"
+  echo "# Nameserver groups"
+  if [ "$(printf '%s' "$ns" | jq -r 'length')" -eq 0 ]; then
+    echo "(none configured)"
+  else
+    printf '%s' "$ns" | jq -r '.[] |
+        "\(.name // "?")\t\(if .enabled then "enabled" else "DISABLED" end)\t\([(.nameservers // [])[] | "\(.ip):\(.port)"] | join(","))\t\([(.domains // [])[]] | join(",") | if . == "" then "(all)" else . end)\t\(if .primary then "primary" else "-" end)"' \
+      | awk -F'\t' 'BEGIN{printf "%-24s %-9s %-32s %-26s %s\n","GROUP","STATE","NAMESERVERS","DOMAINS","ROLE"}
+                    {printf "%-24s %-9s %-32s %-26s %s\n",$1,$2,$3,$4,$5}'
+  fi
+  echo
+  echo "# DNS settings"
+  st="$(_read "${API}/dns/settings")"
+  _expect_object "$st" "${API}/dns/settings"
+  printf '%s' "$st" | jq -r '"Management disabled for groups: \((.disabled_management_groups // []) | if length == 0 then "(none)" else join(", ") end)"'
+}
+
+# Setup keys are the one read here that touches a secret, and NetBird already
+# handles it: list and get return the key masked (A6160****), and the plaintext
+# exists only in the response to a create. A broker that cannot POST therefore
+# cannot see one - the protection is structural, not a redaction this file has
+# to remember to apply. `key-create` is the exception and guards itself.
+op_keys() {
+  local j; j="$(_read "${API}/setup-keys")"
+  _expect_array "$j" "${API}/setup-keys"
+  printf '%s' "$j" | jq -r "${JQ_FMT}"'
+    .[] | "\(.name // "?")\t\(.id // "-")\t\(.type // "-")\t\(if .revoked then "REVOKED" elif .valid then "valid" else "expired" end)\t\(.used_times // 0)/\(if (.usage_limit // 0) == 0 then "inf" else (.usage_limit | tostring) end)\t\(.expires | ago)\t\([(.auto_groups // [])[]] | length) groups"' \
+    | awk -F'\t' 'BEGIN{printf "%-24s %-38s %-10s %-9s %10s %-12s %s\n","NAME","ID","TYPE","STATE","USED","EXPIRES","AUTO-GROUPS"}
+                  {printf "%-24s %-38s %-10s %-9s %10s %-12s %s\n",$1,$2,$3,$4,$5,$6,$7}'
+}
+
+op_posture() {
+  local j; j="$(_read "${API}/posture-checks")"
+  _expect_array "$j" "${API}/posture-checks"
+  if [ "$(printf '%s' "$j" | jq -r 'length')" -eq 0 ]; then
+    echo "No posture checks configured."
+    return 0
+  fi
+  printf '%s' "$j" | jq -r '.[] |
+      "\(.name // "?")\t\(.id // "-")\t\([(.checks // {} | keys)[]] | join(","))\t\((.description // "") | gsub("\\s+"; " "))"' \
+    | awk -F'\t' 'BEGIN{printf "%-26s %-22s %-30s %s\n","CHECK","ID","KINDS","DESCRIPTION"}
+                  {printf "%-26s %-22s %-30s %s\n",$1,$2,$3,$4}'
+}
+
+# Who changed what. This endpoint has no pagination and hands back the whole
+# history, so the cap is applied here rather than asked for.
+op_events() {
+  local n; n="$(_limit "${1:-}" 20)"
+  local j; j="$(_read "${API}/events/audit")"
+  _expect_array "$j" "${API}/events/audit"
+  if [ "$(printf '%s' "$j" | jq -r 'length')" -eq 0 ]; then
+    echo "No audit events recorded."
+    return 0
+  fi
+  printf '%s' "$j" | jq -r --argjson n "$n" '
+    sort_by(.timestamp) | reverse | .[0:$n] | .[] |
+      "\((.timestamp // "-") | sub("\\.[0-9]+"; "") | sub("T"; " ") | sub("Z$"; ""))\t\(.initiator_name // .initiator_email // "-")\t\(.activity // .activity_code // "-")\t\(.target_id // "-")"' \
+    | awk -F'\t' 'BEGIN{printf "%-20s %-24s %-40s %s\n","WHEN","WHO","WHAT","TARGET"}
+                  {printf "%-20s %-24s %-40s %s\n",$1,$2,$3,$4}'
+}
+
+# Network traffic events are a paid NetBird feature, so this is the one read op
+# that is allowed to come back empty-handed with an explanation instead of an
+# error: not being on the plan is a fact about your account, not a fault.
+op_traffic() {
+  local n; n="$(_limit "${1:-}" 20)"
+  local j rc=0
+  j="$(_read "${API}/events/network-traffic" "page=1" "page_size=${n}" 2>/dev/null)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "Network traffic events are not available on this account."
+    echo "(They are a paid NetBird feature; the audit log is on every plan: hh netbird events)"
+    return 0
+  fi
+  # This endpoint is paginated, so it answers with an envelope - but which key
+  # holds the rows has moved between NetBird versions, and a bare array is also
+  # possible. Normalise all of those to a list here rather than indexing one
+  # shape and erroring on the others.
+  local rows
+  rows="$(printf '%s' "$j" | jq -c 'if type == "array" then . else (.data // .events // .items // []) end' 2>/dev/null)" || rows=""
+  if [ -z "$rows" ] || [ "$(printf '%s' "$rows" | jq -r 'length' 2>/dev/null || echo 0)" -eq 0 ]; then
+    echo "No network traffic events recorded."
+    return 0
+  fi
+  printf '%s' "$rows" | jq -r "${JQ_FMT}"'
+    .[] |
+      "\((.timestamp // "-") | sub("\\.[0-9]+"; "") | sub("T"; " ") | sub("Z$"; ""))\t\(.reporter_name // .reporter_id // "-")\t\(.protocol // "-")\t\(.source_ip // "-")\t\(.destination_ip // "-")\t\(.destination_port // "-")\t\(.policy_name // "-")"' \
+    | awk -F'\t' 'BEGIN{printf "%-20s %-22s %-6s %-16s %-16s %6s  %s\n","WHEN","REPORTER","PROTO","SOURCE","DESTINATION","PORT","POLICY"}
+                  {printf "%-20s %-22s %-6s %-16s %-16s %6s  %s\n",$1,$2,$3,$4,$5,$6,$7}'
+}
+
+# The compact block hh overview and hh inventory print.
+#
+# Note on error handling: die() runs `exit`, and an `exit` inside a command
+# substitution ends that subshell outright - an `|| true` written INSIDE the
+# substitution never runs, so it catches nothing. Every tolerated call below
+# therefore puts its fallback OUTSIDE the substitution, where it sees the real
+# status. Getting this backwards makes an unreachable management server produce
+# silence instead of a reason, which is the one outcome this must never have.
+op_summary() {
+  local peers routers pol
+
+  # Deliberately NOT tolerated: if the management server cannot be reached or
+  # the token is refused, that is the answer, and it should be reported rather
+  # than papered over with a header and a set of blank sections.
+  peers="$(_peers)"
+  printf 'NetBird   %s   (token can %s)\n' "$HOST" \
+    "$(if [ "$WRITE" = "yes" ]; then echo write; else echo read; fi)"
+  printf '%s' "$peers" | jq -r '"Peers     \(length) registered, \([.[] | select(.connected)] | length) connected"'
+
+  # An offline peer that used to be online is the thing a person wants named
+  # rather than counted, so name a few - the same call the other brokers make
+  # for an offline switch or device.
+  printf '%s' "$peers" | jq -r "${JQ_FMT}"'
+    [.[] | select(.connected | not)] |
+    if length > 0 then "Offline   \(length): \([.[0:8][] | "\(.name // "?") (\(.last_seen | ago))"] | join(", "))\(if length > 8 then ", ..." else "" end)" else empty end'
+
+  # A peer waiting on approval is invisible until someone looks, and it stays
+  # off the mesh the whole time. That is worth a line of its own.
+  printf '%s' "$peers" | jq -r '[.[] | select(.approval_required) | .name // "?"] |
+    if length > 0 then "Approval  \(length) peer\(if length == 1 then "" else "s" end) waiting: \(join(", "))" else empty end'
+
+  # Agent drift is the most common cause of a mesh that works unevenly, and it
+  # is exactly the shape of thing hh unifi summary reports for firmware: name
+  # the laggards rather than making someone diff a version column by eye.
+  # Compare versions componentwise, never as strings: lexically "0.9.0" sorts
+  # ABOVE "0.51.0", which would name every up-to-date peer as the laggard and
+  # quietly recommend a downgrade.
+  printf '%s' "$peers" | jq -r '
+    ([.[] | .version // empty] | map(select(. != "")) | unique) as $vs
+    | if ($vs | length) > 1 then
+        ($vs | map({v: ., k: (sub("^v"; "") | split(".") | map(tonumber? // 0))})
+             | sort_by(.k) | last | .v) as $latest
+        | [.[] | select((.version // $latest) != $latest) | .name // "?"] as $old
+        | if ($old | length) > 0 then "Versions  \($old | length) peer\(if ($old | length) == 1 then "" else "s" end) behind \($latest): \($old[0:6] | join(", "))\(if ($old | length) > 6 then ", ..." else "" end)" else empty end
+      else empty end'
+
+  routers="$(_read "${API}/networks/routers" 2>/dev/null)" || routers=""
+  if printf '%s' "$routers" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    printf '%s' "$routers" | jq -r 'if length > 0 then
+      "Routers   \(length) network router\(if length == 1 then "" else "s" end), \([.[] | select(.enabled)] | length) enabled" else empty end'
+  fi
+
+  pol="$(_read "${API}/policies" 2>/dev/null)" || pol=""
+  if printf '%s' "$pol" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    printf '%s' "$pol" | jq -r '"Policies  \(length) total, \([.[] | select(.enabled | not)] | length) disabled"'
+  fi
+}
+
+# Escape hatch: any GET under /api/. This covers every resource the named ops do
+# not - DNS zones, services, posture check detail, geo locations, the instance
+# endpoint - without this broker having to grow an op per endpoint, and without
+# giving up anything, since it can still only issue a GET.
+#
+# There is deliberately no write equivalent. See the header.
+op_get() {
+  [ "$#" -ge 1 ] || die "usage: hh netbird get [alias] </api/...> [name=value ...]"
+  local p="$1"; shift
+  case "$p" in
+    /api/*) : ;;
+    *) die "path must start with /api/ (got: ${p})" ;;
+  esac
+  case "$p" in *..*) die "path may not contain '..'" ;; esac
+  _read "$p" "$@"
+}
+
+# ---------------------------------------------------------------------------
+# Write ops
+#
+# Every one of these builds its body with jq -n --arg, never by pasting a value
+# into a JSON string. A peer named  foo","admin":true  is a perfectly legal
+# NetBird name and an injection into hand-built JSON; jq makes that a string
+# containing quotes, which is what it actually is.
+#
+# They are also all READ-MODIFY-WRITE where the API replaces rather than merges.
+# NetBird's PUT endpoints take the whole object, so sending only the field you
+# meant to change silently clears the others. Reading first costs one request
+# and is the difference between renaming a peer and renaming a peer while
+# turning its SSH server back on.
+
+# One field on one peer, preserving the rest. All four peer ops funnel through
+# here so the read-modify-write is written once and cannot rot in one of them.
+_peer_set() {
+  local peer="$1" field="$2" value="$3" body id name
+  id="$(printf '%s' "$peer" | jq -r '.id')"
+  name="$(printf '%s' "$peer" | jq -r '.name // .hostname // .ip')"
+  body="$(printf '%s' "$peer" | jq -c --arg f "$field" --argjson v "$value" '
+    {name, ssh_enabled, login_expiration_enabled, inactivity_expiration_enabled, approval_required}
+    | with_entries(select(.value != null))
+    | .[$f] = $v')"
+  _put "${API}/peers/${id}" "$body" >/dev/null
+  printf '%s' "$name"
+}
+
+op_rename() {
+  [ "$#" -ge 2 ] || die "usage: hh netbird rename [alias] <peer> <new-name>"
+  local peer old; peer="$(_resolve_peer "$1")"
+  old="$(printf '%s' "$peer" | jq -r '.name // "?"')"
+  _peer_set "$peer" name "$(jq -n --arg s "$2" '$s')" >/dev/null
+  printf 'Renamed peer %s -> %s\n' "$old" "$2"
+}
+
+op_approve() {
+  [ "$#" -ge 1 ] || die "usage: hh netbird approve [alias] <peer>"
+  local peer name; peer="$(_resolve_peer "$1")"
+  if [ "$(printf '%s' "$peer" | jq -r '.approval_required // false')" != "true" ]; then
+    printf '%s is already approved; nothing to do.\n' "$(printf '%s' "$peer" | jq -r '.name // "?"')"
+    return 0
+  fi
+  name="$(_peer_set "$peer" approval_required false)"
+  printf 'Approved peer %s (it can now join the mesh)\n' "$name"
+}
+
+# on/off rather than true/false: this is typed by a person as often as by an
+# agent, and "hh netbird ssh laptop off" is the sentence they would say.
+_onoff() {
+  case "${1:-}" in
+    on|true|yes|enable|enabled)   printf 'true' ;;
+    off|false|no|disable|disabled) printf 'false' ;;
+    *) die "expected 'on' or 'off', got: ${1:-(nothing)}" ;;
+  esac
+}
+
+op_ssh() {
+  [ "$#" -ge 2 ] || die "usage: hh netbird ssh [alias] <peer> <on|off>"
+  local peer v name; peer="$(_resolve_peer "$1")"; v="$(_onoff "$2")"
+  # Turning the SSH server ON is the one peer flag that widens access rather
+  # than narrowing it, so it is treated as destructive even though nothing is
+  # destroyed: it opens a door on a host, and it should be a decision.
+  if [ "$v" = "true" ]; then
+    _confirm "turn NetBird's SSH server ON for $(printf '%s' "$peer" | jq -r '.name // "?"'), which lets any peer allowed by policy open a shell on it"
+  fi
+  name="$(_peer_set "$peer" ssh_enabled "$v")"
+  printf 'NetBird SSH on %s is now %s\n' "$name" "$2"
+}
+
+op_expiration() {
+  [ "$#" -ge 2 ] || die "usage: hh netbird expiration [alias] <peer> <on|off>"
+  local peer v name; peer="$(_resolve_peer "$1")"; v="$(_onoff "$2")"
+  name="$(_peer_set "$peer" login_expiration_enabled "$v")"
+  printf 'Login expiration on %s is now %s\n' "$name" "$2"
+}
+
+op_rm_peer() {
+  [ "$#" -ge 1 ] || die "usage: hh netbird rm-peer [alias] <peer>"
+  local peer id name ip
+  peer="$(_resolve_peer "$1")"
+  id="$(printf '%s' "$peer" | jq -r '.id')"
+  name="$(printf '%s' "$peer" | jq -r '.name // "?"')"
+  ip="$(printf '%s' "$peer" | jq -r '.ip // "-"')"
+  if _is_self_peer "$peer"; then
+    _confirm_self "remove it from the mesh entirely" "$name"
+  else
+    _confirm "remove peer ${name} (${ip}) from the mesh. It would have to enrol again with a setup key to come back, and it loses its current mesh IP"
+  fi
+  _delete "${API}/peers/${id}" >/dev/null
+  printf 'Removed peer %s (%s)\n' "$name" "$ip"
+}
+
+# Group membership is where most day-to-day mesh work actually happens: access
+# policies are written against groups, so moving a peer between them is how a
+# host gains or loses reach.
+_group_set_peers() {
+  local group peers body id
+  group="$1"; peers="$2"
+  id="$(printf '%s' "$group" | jq -r '.id')"
+  body="$(printf '%s' "$group" | jq -c --argjson p "$peers" '
+    {name: .name, peers: $p, resources: (.resources // [])}')"
+  _put "${API}/groups/${id}" "$body" >/dev/null
+}
+
+op_group_add() {
+  [ "$#" -ge 2 ] || die "usage: hh netbird group-add [alias] <peer> <group>"
+  local peer group pid gname members
+  peer="$(_resolve_peer "$1")"; group="$(_resolve_group "$2")"
+  pid="$(printf '%s' "$peer" | jq -r '.id')"
+  gname="$(printf '%s' "$group" | jq -r '.name')"
+  members="$(printf '%s' "$group" | jq -c '[(.peers // [])[] | if type == "object" then .id else . end]')"
+  if printf '%s' "$members" | jq -e --arg p "$pid" 'index($p) != null' >/dev/null; then
+    printf '%s is already in %s; nothing to do.\n' "$(printf '%s' "$peer" | jq -r '.name')" "$gname"
+    return 0
+  fi
+  _group_set_peers "$group" "$(printf '%s' "$members" | jq -c --arg p "$pid" '. + [$p]')"
+  printf 'Added %s to group %s\n' "$(printf '%s' "$peer" | jq -r '.name')" "$gname"
+}
+
+op_group_rm() {
+  [ "$#" -ge 2 ] || die "usage: hh netbird group-rm [alias] <peer> <group>"
+  local peer group pid gname members pname
+  peer="$(_resolve_peer "$1")"; group="$(_resolve_group "$2")"
+  pid="$(printf '%s' "$peer" | jq -r '.id')"
+  pname="$(printf '%s' "$peer" | jq -r '.name // "?"')"
+  gname="$(printf '%s' "$group" | jq -r '.name')"
+  members="$(printf '%s' "$group" | jq -c '[(.peers // [])[] | if type == "object" then .id else . end]')"
+  if ! printf '%s' "$members" | jq -e --arg p "$pid" 'index($p) != null' >/dev/null; then
+    printf '%s is not in %s; nothing to do.\n' "$pname" "$gname"
+    return 0
+  fi
+  # Removing a peer from a group revokes whatever access the policies written
+  # against that group granted it. That is a loss of reach, and if the peer is
+  # this machine it is a loss of the reach you are using.
+  if _is_self_peer "$peer"; then
+    _confirm_self "take it out of group ${gname}, dropping whatever access the policies on that group grant it" "$pname"
+  else
+    _confirm "remove ${pname} from group ${gname}, revoking the access every policy written against that group grants it"
+  fi
+  _group_set_peers "$group" "$(printf '%s' "$members" | jq -c --arg p "$pid" 'map(select(. != $p))')"
+  printf 'Removed %s from group %s\n' "$pname" "$gname"
+}
+
+# A policy PUT replaces the whole object, and the GET shape is not the PUT
+# shape: sources and destinations come back as expanded group objects and have
+# to go back as bare ids. Getting that wrong does not error - it sends a rule
+# with no sources, which quietly stops matching anything.
+_policy_put() {
+  local policy enabled id body
+  policy="$1"; enabled="$2"
+  id="$(printf '%s' "$policy" | jq -r '.id')"
+  body="$(printf '%s' "$policy" | jq -c --argjson e "$enabled" '
+    {
+      name, description, enabled: $e,
+      source_posture_checks: [((.source_posture_checks // [])[] | if type == "object" then .id else . end)],
+      rules: [ (.rules // [])[] | {
+        id, name, description, enabled, action, bidirectional, protocol,
+        ports, port_ranges,
+        sources: [((.sources // [])[] | if type == "object" then .id else . end)],
+        destinations: [((.destinations // [])[] | if type == "object" then .id else . end)],
+        sourceResource, destinationResource
+      } | with_entries(select(.value != null)) ]
+    }')"
+  _put "${API}/policies/${id}" "$body" >/dev/null
+}
+
+op_policy_enable() {
+  [ "$#" -ge 1 ] || die "usage: hh netbird policy-enable [alias] <policy>"
+  local p; p="$(_resolve_policy "$1")"
+  # Enabling an ACCEPT policy widens access, so it is gated the same way
+  # turning on SSH is. Enabling a DROP policy narrows it and is not.
+  if printf '%s' "$p" | jq -e '[(.rules // [])[] | .action] | index("accept") != null' >/dev/null; then
+    _confirm "enable policy $(printf '%s' "$p" | jq -r '.name'), which grants the access its accept rules describe"
+  fi
+  _policy_put "$p" true
+  printf 'Enabled policy %s\n' "$(printf '%s' "$p" | jq -r '.name')"
+}
+
+op_policy_disable() {
+  [ "$#" -ge 1 ] || die "usage: hh netbird policy-disable [alias] <policy>"
+  local p name; p="$(_resolve_policy "$1")"
+  name="$(printf '%s' "$p" | jq -r '.name')"
+  _confirm "disable policy ${name}, which withdraws the access it grants. Peers relying on it lose reach immediately"
+  _policy_put "$p" false
+  printf 'Disabled policy %s\n' "$name"
+}
+
+op_rm_policy() {
+  [ "$#" -ge 1 ] || die "usage: hh netbird rm-policy [alias] <policy>"
+  local p id name; p="$(_resolve_policy "$1")"
+  id="$(printf '%s' "$p" | jq -r '.id')"; name="$(printf '%s' "$p" | jq -r '.name')"
+  _confirm "delete policy ${name} outright. Disabling it (hh netbird policy-disable) is reversible; this is not, and the rules it contains are not recorded anywhere else"
+  _delete "${API}/policies/${id}" >/dev/null
+  printf 'Deleted policy %s\n' "$name"
+}
+
+op_rm_group() {
+  [ "$#" -ge 1 ] || die "usage: hh netbird rm-group [alias] <group>"
+  local g id name n; g="$(_resolve_group "$1")"
+  id="$(printf '%s' "$g" | jq -r '.id')"; name="$(printf '%s' "$g" | jq -r '.name')"
+  n="$(printf '%s' "$g" | jq -r '(.peers // []) | length')"
+  _confirm "delete group ${name}, which currently holds ${n} peer(s). Every policy written against it stops matching them"
+  _delete "${API}/groups/${id}" >/dev/null
+  printf 'Deleted group %s\n' "$name"
+}
+
+# Revoking a setup key does not remove the peers already enrolled with it; it
+# only stops it being used again. That is a meaningful difference and the
+# message says so, because "revoke the key" is often said when "remove the
+# peer" is meant.
+op_key_revoke() {
+  [ "$#" -ge 1 ] || die "usage: hh netbird key-revoke [alias] <key-name-or-id>"
+  local all k id name body
+  all="$(_read "${API}/setup-keys")"; _expect_array "$all" "${API}/setup-keys"
+  k="$(_resolve_one "$1" "$all" "setup key")"
+  id="$(printf '%s' "$k" | jq -r '.id')"; name="$(printf '%s' "$k" | jq -r '.name')"
+  if [ "$(printf '%s' "$k" | jq -r '.revoked // false')" = "true" ]; then
+    printf 'Setup key %s is already revoked; nothing to do.\n' "$name"
+    return 0
+  fi
+  _confirm "revoke setup key ${name}, so it can never enrol another peer. Peers already enrolled with it stay on the mesh - to remove one of those, use rm-peer"
+  body="$(printf '%s' "$k" | jq -c '{name, auto_groups: [((.auto_groups // [])[] | if type == "object" then .id else . end)], revoked: true}')"
+  _put "${API}/setup-keys/${id}" "$body" >/dev/null
+  printf 'Revoked setup key %s\n' "$name"
+}
+
+# The one op that produces a secret.
+#
+# NetBird returns the plaintext setup key exactly once, in the response to this
+# call, and never again - every later read shows it masked. So this refuses to
+# run anywhere the key would land in a transcript: it writes the key to the
+# terminal and nothing else, and prints only the id and the masked form on
+# stdout. The rest of HomelabHero holds this line already (add-unifi and
+# add-firewalla are shell-only because a secret typed into an agent session has
+# been seen by it); a secret PRINTED into one has been seen just the same.
+op_key_create() {
+  [ "$#" -ge 1 ] || die "usage: hh netbird key-create [alias] <name> [reusable|one-off] [days] [group ...]"
+  local name="$1"; shift
+  local kind="${1:-one-off}"; [ "$#" -gt 0 ] && shift || true
+  local days="${1:-7}"; [ "$#" -gt 0 ] && shift || true
+  local type
+  case "$kind" in
+    reusable) type="reusable" ;;
+    one-off|oneoff|once) type="one-off" ;;
+    *) die "expected 'reusable' or 'one-off', got: ${kind}" ;;
+  esac
+  [[ "$days" =~ ^[0-9]+$ ]] && [ "$days" -ge 1 ] && [ "$days" -le 365 ] \
+    || die "expected an expiry in days between 1 and 365, got: ${days}"
+
+  if ! { exec 3>/dev/tty; } 2>/dev/null; then
+    die "a setup key is a secret, and there is no terminal here to print it to.
+    NetBird shows the plaintext key exactly once - in the response to this call
+    - so running it in an agent session would put the only copy into a
+    transcript. Run it yourself from an admin shell instead:
+
+        ${RETRY}
+
+    Everything else about setup keys is readable from here: hh netbird keys"
+  fi
+
+  # Resolve any group names to ids up front, so a typo fails before a key that
+  # nobody can see has already been created.
+  local gids='[]' g gj
+  for g in "$@"; do
+    gj="$(_resolve_group "$g")"
+    gids="$(printf '%s' "$gids" | jq -c --arg i "$(printf '%s' "$gj" | jq -r '.id')" '. + [$i]')"
+  done
+
+  local body out key id
+  body="$(jq -nc --arg n "$name" --arg t "$type" --argjson d "$days" --argjson g "$gids" '
+    {name: $n, type: $t, expires_in: ($d * 86400), revoked: false,
+     auto_groups: $g, usage_limit: (if $t == "reusable" then 0 else 1 end), ephemeral: false}')"
+  out="$(_post "${API}/setup-keys" "$body")"
+  _expect_object "$out" "${API}/setup-keys"
+  key="$(printf '%s' "$out" | jq -r '.key // empty')"
+  id="$(printf '%s' "$out" | jq -r '.id // "?"')"
+  [ -n "$key" ] || die "NetBird created the key but returned no plaintext for it (id ${id})"
+
+  printf '\nSetup key %s (%s, expires in %s days):\n\n    %s\n\nCopy it now - NetBird will never show it again.\n\n' \
+    "$name" "$type" "$days" "$key" >&3
+  exec 3>&-
+  printf 'Created setup key %s (id %s, %s, expires in %s days).\n' "$name" "$id" "$type" "$days"
+  printf 'The key itself was printed to your terminal only, and is not in this output.\n'
+}
+
+audit "$OP $*"
+
+# Settle write capability before the op runs, not when it reaches _write.
+# Without this a read-only alias spends a request resolving a peer name before
+# discovering it was never allowed to change it, and the audit log records an
+# attempt that could never have gone anywhere. _write re-checks regardless: this
+# is the early exit, not the enforcement.
+case "$OP" in
+  rename|approve|ssh|expiration|group-add|group-rm|policy-enable|policy-disable|key-create|key-revoke|rm-peer|rm-policy|rm-group)
+    _require_write ;;
+esac
+
+case "$OP" in
+  # Reads.
+  ping)            op_ping ;;
+  info)            op_info ;;
+  summary)         op_summary ;;
+  peers)           op_peers ;;
+  peer)            op_peer "$@" ;;
+  groups)          op_groups ;;
+  networks)        op_networks ;;
+  routers)         op_routers ;;
+  resources)       op_resources "$@" ;;
+  policies)        op_policies ;;
+  # policy-show, not "policy": Claude's permission rules match on a command
+  # PREFIX, so an allow-rule for "hh netbird policy" would also have matched
+  # policy-enable and policy-disable, quietly granting two writes with a read.
+  # No read op here is a prefix of a write op, and that is a rule to keep.
+  policy-show|policy) op_policy "$@" ;;
+  dns)             op_dns ;;
+  keys)            op_keys ;;
+  posture)         op_posture ;;
+  events)          op_events "$@" ;;
+  traffic)         op_traffic "$@" ;;
+  get)             op_get "$@" ;;
+  # Writes. Each is a named op with a hardcoded method and path; there is no
+  # generic write path here on purpose, so an endpoint nobody wrote an op for
+  # cannot be written to at all.
+  rename)          op_rename "$@" ;;
+  approve)         op_approve "$@" ;;
+  ssh)             op_ssh "$@" ;;
+  expiration)      op_expiration "$@" ;;
+  group-add)       op_group_add "$@" ;;
+  group-rm)        op_group_rm "$@" ;;
+  policy-enable)   op_policy_enable "$@" ;;
+  policy-disable)  op_policy_disable "$@" ;;
+  key-create)      op_key_create "$@" ;;
+  key-revoke)      op_key_revoke "$@" ;;
+  rm-peer)         op_rm_peer "$@" ;;
+  rm-policy)       op_rm_policy "$@" ;;
+  rm-group)        op_rm_group "$@" ;;
+  # Named so the refusal explains the design instead of reading as a typo.
+  post|put|patch|delete|raw)
+    die "there is no generic write op here, by design.
+    Reads have an escape hatch ('hh netbird get <path>') because a GET nobody
+    anticipated is still only a GET. Writes do not: every one is a named op with
+    a path this broker hardcodes, so an endpoint nobody wrote an op for cannot be
+    written to. If you need one that does not exist yet, it should be added here
+    and reviewed, not composed at the call site." ;;
+  *) die "unknown op: ${OP}
+    read:  ping info summary peers peer groups networks routers resources
+           policies policy-show dns keys posture events traffic get
+    write: rename approve ssh expiration group-add group-rm policy-enable
+           policy-disable key-create key-revoke rm-peer rm-policy rm-group" ;;
+esac

@@ -149,8 +149,9 @@ numbers, and `B/KB/MB/GB/TB` units. Qualifiers that work almost everywhere:
 ## What Firewalla cannot tell you
 
 The MSP knows the boxes, the devices they see, the traffic through them, and
-the rules applied to it. It does not know about the NetBird mesh, DNS
-resolution inside a host, Cloudflare tunnels, or anything happening inside a
+the rules applied to it. It does not know about the NetBird mesh (see
+`netbird.md`), Cloudflare tunnels (see `cloudflare.md`), DNS resolution inside a
+host, or anything happening inside a
 machine. For those, use the network-diag skill and `hh run` against the hosts
 themselves. A device can look perfectly healthy to Firewalla and still be
 unreachable over the mesh.

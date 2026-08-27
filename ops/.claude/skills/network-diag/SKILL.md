@@ -29,9 +29,23 @@ covers the rest, including clients and VLANs.
 This is read-only: it diagnoses the fabric, it does not reconfigure it. UniFi
 changes are made by hand in the UniFi app.
 
-What UniFi cannot see, and this skill can: the NetBird mesh, DNS resolution,
-Cloudflare tunnels, and anything inside a host. A service can look perfectly
-healthy from the router and still be unreachable over the mesh.
+## Then ask the mesh and the edge, if they are registered
+
+The overlay and the ingress each have their own control plane, and each answers
+when the host in question does not. Check them before shelling anywhere:
+
+    hh netbird summary               # is the peer even connected? (netbird-ops)
+    hh cloudflare summary            # is the tunnel up? (cloudflare-ops)
+
+This is the order that saves the most time: fabric, then overlay, then edge,
+then the host. Three of those four answer while the host is unreachable, so
+working inward means you usually know WHERE the break is before you try to log
+in to anything.
+
+What none of them can see, and this skill can: DNS resolution inside a host,
+the host's own interfaces and routes, and whether the service itself is alive.
+A NetBird peer can be `connected` and a Cloudflare tunnel `healthy` while the
+app behind them returns 502 all day.
 
 ## Localize: is it reachability, name resolution, or the service
 
@@ -46,6 +60,14 @@ Three quick outcomes:
 - Both fine, port closed -> the service, not the network (hand back to the app)
 
 ## NetBird mesh
+
+Ask the control plane first - it answers when the peer does not:
+
+    hh netbird summary                 # offline peers, agent version drift
+    hh netbird peers                   # last seen, per peer
+    hh netbird peer <name>             # one peer in full
+
+Then the peer's own opinion, which is a good second source and a poor first one:
 
     netbird status                     # local peers and connection state
     hh run <alias> "netbird status"       # from the far side, if reachable another way
@@ -64,6 +86,18 @@ stale record after a gateway change) show up as "works from here, not from
 there". Compare answers from two vantage points.
 
 ## Ingress (Cloudflare Tunnels)
+
+Cloudflare's own view first, for the same reason:
+
+    hh cloudflare tunnels              # status and live connection counts
+    hh cloudflare tunnel-show <name>   # which hostname maps to which service
+    hh cloudflare records <zone> <name>  # does the DNS record point at it
+
+A hostname needs BOTH an ingress rule and a CNAME to
+`<tunnel-id>.cfargotunnel.com`; one without the other is a common half-finished
+state that looks like a tunnel fault and is not.
+
+Then the daemon on the host:
 
     hh run <tunnel-host> "cloudflared tunnel list"
     hh run <tunnel-host> "systemctl status cloudflared"
