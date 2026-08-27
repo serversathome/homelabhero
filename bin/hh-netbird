@@ -434,6 +434,31 @@ _is_self_peer() {
 # has to bring back to you, in your words, before it can run the same command
 # again with --force - which makes the confirmation happen where a person
 # actually is, rather than inside a pipe.
+# The GET paths that may hand back a credential rather than describe one.
+#
+# NetBird's own setup keys are safe to read because the API masks them and the
+# plaintext exists only in a POST response this broker cannot make. A BYOP proxy
+# access token is NOT documented as masked, and it is documented as being shown
+# only once at creation - which is exactly the shape of thing that is dangerous
+# to relay if the list endpoint ever returns it. Since the docs are silent and
+# the cost of being wrong is a live credential in a transcript, this refuses
+# rather than finding out. Revoking such a token disconnects every proxy
+# registered with it, so it is not a small credential to leak.
+_deny_secret_path() {
+  case "$1" in
+    */reverse-proxies/proxy-tokens*)
+      die "that endpoint deals in BYOP proxy access tokens, which this broker will not
+    read or relay. NetBird shows a proxy token's plaintext only once, at
+    creation, and anyone holding one can register a reverse proxy against your
+    account. Manage them in the NetBird dashboard.
+
+    Everything else about your proxies is readable from here:
+        hh netbird proxies      the clusters and whether they are connected
+        hh netbird services     what is published through them
+        hh netbird domains      the apex domains and their validation state" ;;
+  esac
+}
+
 _confirm() {
   local what="$1"
   [ "$FORCE" -eq 1 ] && return 0
@@ -617,6 +642,77 @@ op_events() {
                   {printf "%-20s %-24s %-40s %s\n",$1,$2,$3,$4}'
 }
 
+# ---------------------------------------------------------------------------
+# Bring Your Own Proxy (BYOP)
+#
+# A second way into the homelab, alongside Cloudflare Tunnel: NetBird can
+# publish a service under a domain you own, terminated by a reverse proxy you
+# run yourself and forwarded to a peer over WireGuard. If it is in use, "is this
+# service reachable from outside" has two possible answers and Cloudflare only
+# knows one of them.
+#
+# All of it lives under /api/reverse-proxies/. These ops are read-only: creating
+# and editing a service is dashboard work, and the token that registers a proxy
+# is deliberately out of reach entirely (see _deny_secret_path).
+#
+# Field names here are read defensively. This is a newer part of the API than
+# the rest, the docs do not pin every key, and a table that prints "-" for a
+# column whose name changed is a much better failure than one that dies.
+BYOP="${API}/reverse-proxies"
+
+op_proxies() {
+  local j; j="$(_read "${BYOP}/clusters")"
+  _expect_array "$j" "${BYOP}/clusters"
+  if [ "$(printf '%s' "$j" | jq -r 'length')" -eq 0 ]; then
+    echo "No reverse-proxy clusters registered (BYOP is not in use on this account)."
+    return 0
+  fi
+  printf '%s' "$j" | jq -r '.[] |
+      (.connected_proxies // .connected // .proxy_count // .replicas // 0) as $n |
+      "\(.address // .cluster_address // .domain // "?")\t\(if (.online // ($n > 0)) then "online" else "OFFLINE" end)\t\($n)\t\(.version // "-")\t\(.region // .location // "-")"' \
+    | awk -F'\t' 'BEGIN{printf "%-38s %-9s %9s %-12s %s\n","CLUSTER","STATE","PROXIES","VERSION","REGION"}
+                  {printf "%-38s %-9s %9s %-12s %s\n",$1,$2,$3,$4,$5}'
+  echo
+  echo "(a cluster with 0 connected proxies is registered but has nothing running:"
+  echo " check the container on its host, and its probe at http://localhost:8080/healthz)"
+}
+
+op_services() {
+  local j; j="$(_read "${BYOP}/services")"
+  _expect_array "$j" "${BYOP}/services"
+  if [ "$(printf '%s' "$j" | jq -r 'length')" -eq 0 ]; then
+    echo "No services published through a NetBird reverse proxy."
+    return 0
+  fi
+  # `private` is the column that matters most and is easiest to get wrong when
+  # reading the dashboard: a private service is reachable only over the mesh and
+  # gated by group, not by a login page, so it is NOT published to the internet
+  # even though it has a domain.
+  printf '%s' "$j" | jq -r '.[] |
+      "\(.name // "?")\t\(.domain // "-")\t\(.mode // "-")\t\(if .private then "mesh-only" else "public" end)\t\(if .enabled then (if .terminated then "TERMINATED" else "enabled" end) else "DISABLED" end)\t\([(.targets // [])[] | (.address // .host // .peer // "?") + (if .port then ":" + (.port|tostring) else "" end)] | join(","))\t\(if (.auth // {} | length) > 0 then ((.auth | keys) | join(",")) else "-" end)\t\([(.access_groups // [])[]] | length)"' \
+    | awk -F'\t' 'BEGIN{printf "%-24s %-38s %-6s %-10s %-11s %-30s %-12s %s\n","SERVICE","DOMAIN","MODE","EXPOSURE","STATE","TARGETS","AUTH","GROUPS"}
+                  {printf "%-24s %-38s %-6s %-10s %-11s %-30s %-12s %s\n",$1,$2,$3,$4,$5,$6,$7,$8}'
+}
+
+op_service() {
+  [ "$#" -ge 1 ] || die "usage: hh netbird service [alias] <name-or-id>"
+  local all; all="$(_read "${BYOP}/services")"; _expect_array "$all" "${BYOP}/services"
+  _resolve_one "$1" "$all" "service" | jq '.'
+}
+
+op_domains() {
+  local j; j="$(_read "${BYOP}/domains")"
+  _expect_array "$j" "${BYOP}/domains"
+  if [ "$(printf '%s' "$j" | jq -r 'length')" -eq 0 ]; then
+    echo "No apex domains registered for reverse proxying."
+    return 0
+  fi
+  printf '%s' "$j" | jq -r '.[] |
+      "\(.domain // .name // "?")\t\(.id // "-")\t\(if (.validated // .verified // false) then "validated" else "NOT VALIDATED" end)\t\(.created_at // "-" | sub("T.*"; ""))"' \
+    | awk -F'\t' 'BEGIN{printf "%-38s %-24s %-15s %s\n","DOMAIN","ID","STATE","CREATED"}
+                  {printf "%-38s %-24s %-15s %s\n",$1,$2,$3,$4}'
+}
+
 # Network traffic events are a paid NetBird feature, so this is the one read op
 # that is allowed to come back empty-handed with an explanation instead of an
 # error: not being on the plan is a fact about your account, not a fault.
@@ -698,6 +794,23 @@ op_summary() {
       "Routers   \(length) network router\(if length == 1 then "" else "s" end), \([.[] | select(.enabled)] | length) enabled" else empty end'
   fi
 
+  # BYOP is optional and most accounts do not use it, so this stays silent when
+  # there is nothing registered rather than printing a reassuring zero.
+  local clusters svcs
+  clusters="$(_read "${BYOP}/clusters" 2>/dev/null)" || clusters=""
+  if printf '%s' "$clusters" | jq -e 'type == "array" and length > 0' >/dev/null 2>&1; then
+    printf '%s' "$clusters" | jq -r '
+      ([.[] | select(.online // ((.connected_proxies // .connected // .proxy_count // 0) > 0))] | length) as $up
+      | "Proxies   \(length) BYOP cluster\(if length == 1 then "" else "s" end), \($up) connected"'
+    printf '%s' "$clusters" | jq -r '[.[] | select((.online // ((.connected_proxies // .connected // .proxy_count // 0) > 0)) | not) | .address // .cluster_address // "?"] |
+      if length > 0 then "Proxy off \(join(", "))" else empty end'
+    svcs="$(_read "${BYOP}/services" 2>/dev/null)" || svcs=""
+    if printf '%s' "$svcs" | jq -e 'type == "array"' >/dev/null 2>&1; then
+      printf '%s' "$svcs" | jq -r 'if length > 0 then
+        "Services  \(length) published (\([.[] | select(.private)] | length) mesh-only), \([.[] | select(.enabled | not)] | length) disabled" else empty end'
+    fi
+  fi
+
   pol="$(_read "${API}/policies" 2>/dev/null)" || pol=""
   if printf '%s' "$pol" | jq -e 'type == "array"' >/dev/null 2>&1; then
     printf '%s' "$pol" | jq -r '"Policies  \(length) total, \([.[] | select(.enabled | not)] | length) disabled"'
@@ -718,6 +831,7 @@ op_get() {
     *) die "path must start with /api/ (got: ${p})" ;;
   esac
   case "$p" in *..*) die "path may not contain '..'" ;; esac
+  _deny_secret_path "$p"
   _read "$p" "$@"
 }
 
@@ -1039,6 +1153,10 @@ case "$OP" in
   dns)             op_dns ;;
   keys)            op_keys ;;
   posture)         op_posture ;;
+  proxies)         op_proxies ;;
+  services)        op_services ;;
+  service)         op_service "$@" ;;
+  domains)         op_domains ;;
   events)          op_events "$@" ;;
   traffic)         op_traffic "$@" ;;
   get)             op_get "$@" ;;
@@ -1069,6 +1187,7 @@ case "$OP" in
   *) die "unknown op: ${OP}
     read:  ping info summary peers peer groups networks routers resources
            policies policy-show dns keys posture events traffic get
+           BYOP: proxies services service domains
     write: rename approve ssh expiration group-add group-rm policy-enable
            policy-disable key-create key-revoke rm-peer rm-policy rm-group" ;;
 esac

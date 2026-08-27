@@ -54,6 +54,29 @@ that order, and an ambiguous substring is refused rather than guessed.
 
 Networks replaced the older Routes resource, which NetBird now marks deprecated.
 
+## Bring Your Own Proxy (BYOP)
+
+Present only if the account runs its own reverse proxies. All read-only:
+creating and editing a service is dashboard work.
+
+- Proxy clusters and live proxy counts: `hh netbird proxies`
+- Published services: `hh netbird services`
+- One service in full: `hh netbird service <name>`
+- Apex domains and validation: `hh netbird domains`
+
+`services` reports EXPOSURE as **public** (on the internet, gated by AUTH) or
+**mesh-only** (reachable only over NetBird, gated by group membership). A
+mesh-only service has a domain and a certificate and is still not published
+externally.
+
+A cluster with 0 connected proxies is registered but not running - that is a
+container on a host, reachable via `hh run <host> "curl -s
+http://localhost:8080/healthz"`.
+
+**Not readable here:** the `proxy-tokens` endpoints. `hh netbird get` refuses
+them. A proxy token's plaintext is shown once at creation and registers a proxy
+against the whole account, so it is dashboard-only.
+
 ## DNS, keys, history
 
 - Nameserver groups and settings: `hh netbird dns`

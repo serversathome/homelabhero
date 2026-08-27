@@ -64,6 +64,7 @@ HomelabHero
                                         networks routers resources policies
                                         policy-show dns keys posture events
                                         traffic get
+                                 BYOP:  proxies services service domains
                                  write: rename approve ssh expiration group-add
                                         group-rm policy-enable policy-disable
                                         key-create key-revoke rm-peer rm-policy
@@ -284,7 +285,8 @@ cmd_netbird() {
   local op="${1:-}"; shift || true
   [ -n "$op" ] || die "usage: hh netbird <op> [alias] [args]
   read:  summary ping info peers peer groups networks routers resources policies
-         policy dns keys posture events traffic get
+         policy-show dns keys posture events traffic get
+         BYOP:  proxies services service domains
   write: rename approve ssh expiration group-add group-rm policy-enable
          policy-disable key-create key-revoke rm-peer rm-policy rm-group"
   local alias=""

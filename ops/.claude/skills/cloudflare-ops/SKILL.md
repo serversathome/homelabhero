@@ -111,6 +111,11 @@ behind it returning 502 all day.
 Pair with `netbird-ops` for the overlay, `network-diag` for DNS resolution and
 the hosts themselves, and `docker-stack-ops` for the service behind the tunnel.
 
+**Cloudflare may not be the only way in.** If the account also runs NetBird BYOP
+(its own reverse proxy), some services are published through that instead. A
+service missing from `tunnel-show` is not necessarily unpublished - check
+`hh netbird services` before saying so.
+
 Useful order when something is unreachable from outside:
 
 1. `hh cloudflare summary` - is the tunnel even up?

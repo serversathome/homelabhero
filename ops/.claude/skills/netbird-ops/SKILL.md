@@ -3,8 +3,9 @@ name: netbird-ops
 description: >
   Read and manage the NetBird mesh VPN: which peers exist and which are
   connected, when a peer was last seen, agent version drift, groups, access
-  policies, network routers and routed resources, mesh DNS, setup keys, and the
-  audit log. Use this whenever the user asks about the mesh, the overlay, a
+  policies, network routers and routed resources, mesh DNS, setup keys, the
+  audit log, and Bring Your Own Proxy (BYOP) - self-hosted reverse proxies, the
+  services published through them, and their apex domains. Use this whenever the user asks about the mesh, the overlay, a
   NetBird peer, whether a host is "on the VPN", why a machine is reachable on
   the LAN but not by its mesh address, who can reach what, or asks to approve a
   peer, move one between groups, turn a policy on or off, or remove a peer.
@@ -61,6 +62,40 @@ common cause of a mesh that works unevenly, so treat that line as a finding.
     hh netbird traffic [n]             # flow events (paid plans only)
     hh netbird get /api/...            # anything else, read-only
 
+## BYOP: services published through your own reverse proxy
+
+If the account uses **Bring Your Own Proxy**, NetBird is also an ingress path -
+a service can be published under a domain you own, terminated by a reverse proxy
+you run, and forwarded to a peer over WireGuard. That matters for triage: when
+someone says a service is unreachable from outside, Cloudflare is no longer
+necessarily the right place to look.
+
+    hh netbird proxies                 # clusters, and how many proxies are live
+    hh netbird services                # what is published, and how it is exposed
+    hh netbird service <name>          # one service in full
+    hh netbird domains                 # apex domains and validation state
+
+Read the EXPOSURE column in `services` carefully, because it is the thing most
+easily misread from the dashboard:
+
+- **public** - reachable from the internet, gated by whatever is in AUTH
+- **mesh-only** - reachable ONLY over the NetBird network, gated by group
+  membership rather than a login page
+
+A mesh-only service has a real domain and a real certificate and is still not
+on the internet. Do not describe one as published externally.
+
+A cluster listed with 0 connected proxies is registered but has nothing running.
+That is a container problem on its host, not a NetBird problem:
+
+    hh run <host> "docker ps | grep reverse-proxy"
+    hh run <host> "curl -s http://localhost:8080/healthz"
+
+**Proxy access tokens are out of reach**, deliberately. `hh netbird get` refuses
+the `proxy-tokens` endpoints: NetBird shows a proxy token's plaintext once, and
+anyone holding one can register a proxy against the account. Manage them in the
+dashboard.
+
 `hh netbird get` reaches any endpoint the API has - DNS zones, services, geo
 locations, the instance endpoint - and can still only issue a GET.
 
@@ -110,10 +145,16 @@ NetBird dashboard instead. Do not go looking for a way around it.
 
 ## What NetBird can and cannot see
 
-It knows the overlay: peers, reachability policy, routed networks, mesh DNS. It
-does NOT know whether the service on a peer is healthy, whether the LAN beneath
-it is fine, or what a Cloudflare Tunnel is doing. A peer can be `connected` and
-the app on it still be down.
+It knows the overlay: peers, reachability policy, routed networks, mesh DNS,
+and - where BYOP is in use - what it publishes and whether its proxies are
+live. It does NOT know whether the service on a peer is healthy, whether the LAN
+beneath it is fine, or what a Cloudflare Tunnel is doing. A peer can be
+`connected`, and a proxy cluster online, and the app behind both still be down.
+
+**Ingress may be either or both.** With BYOP in use, some services reach the
+outside through a NetBird proxy and others through a Cloudflare Tunnel. Check
+`hh netbird services` and `hh cloudflare tunnel-show` before concluding a
+service is not published anywhere.
 
 Pair with `network-diag` for the layers under and over it, `cloudflare-ops` for
 ingress, and `unifi-ops` or `firewalla-ops` for the physical fabric.

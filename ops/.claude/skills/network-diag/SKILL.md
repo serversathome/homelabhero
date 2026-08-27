@@ -85,7 +85,24 @@ Split-horizon mismatches (internal name resolving differently per VLAN, or a
 stale record after a gateway change) show up as "works from here, not from
 there". Compare answers from two vantage points.
 
-## Ingress (Cloudflare Tunnels)
+## Ingress
+
+There may be TWO ways in, and checking only one is the most common way to
+conclude wrongly that a service is not published:
+
+- a **Cloudflare Tunnel**, and
+- a **NetBird BYOP reverse proxy**, if the account runs one.
+
+Ask both before deciding:
+
+    hh netbird services                # NetBird-published, and public vs mesh-only
+    hh cloudflare tunnels              # Cloudflare-published
+
+A NetBird service marked **mesh-only** is reachable over the mesh and gated by
+group membership - it has a domain and a certificate and is deliberately NOT on
+the internet. That is a configuration, not a fault.
+
+### Cloudflare Tunnels
 
 Cloudflare's own view first, for the same reason:
 

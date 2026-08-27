@@ -375,6 +375,13 @@ One thing is refused outright and stays refused: `hh netbird key-create` will
 not run without a terminal. NetBird shows a setup key's plaintext exactly once,
 so running it in an agent session would put the only copy into a transcript.
 
+If you run **Bring Your Own Proxy**, that is covered too: `hh netbird proxies`,
+`services` and `domains` show the clusters, what is published through them, and
+whether each service is public or mesh-only. Worth knowing because it makes
+ingress two paths rather than one - a service missing from your Cloudflare
+tunnels may simply be published through NetBird instead. Proxy access tokens are
+deliberately out of reach: `hh netbird get` refuses those endpoints.
+
 Self-hosted NetBird works too - give `hh add-netbird` your management host
 instead of `api.netbird.io`, and if it presents its own certificate rather than
 a publicly trusted one, HomelabHero pins it the way it pins a UniFi console.

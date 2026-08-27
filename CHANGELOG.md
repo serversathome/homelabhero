@@ -48,6 +48,26 @@ Writes (Admin service-user token only): `rename approve ssh expiration
 group-add group-rm policy-enable policy-disable key-create key-revoke rm-peer
 rm-policy rm-group`.
 
+**Bring Your Own Proxy.** Where the account runs its own NetBird reverse
+proxies, `hh netbird proxies`, `services`, `service` and `domains` report the
+clusters and how many proxies are live, what is published through them, and the
+apex domains. `summary` gains proxy and service lines, and stays silent when
+BYOP is not in use rather than printing a reassuring zero. `services` reports
+exposure as **public** or **mesh-only** - a mesh-only service has a domain and
+a certificate and is deliberately not on the internet, which is the detail most
+easily misread from the dashboard.
+
+This also means ingress may be two paths rather than one, so `network-diag`
+now asks both NetBird and Cloudflare before concluding a service is not
+published, and `cloudflare-ops` says the same.
+
+`hh netbird get` refuses the `proxy-tokens` endpoints. A proxy access token's
+plaintext is shown once at creation and registers a proxy against the whole
+account; NetBird's docs do not say whether the list endpoint returns it, and
+that is not a thing to find out by trying. This is the same guard Cloudflare's
+broker carries for the tunnel token - the one place in each API where "it can
+only issue a GET" stops being a sufficient safety argument.
+
 **Cloudflare - `hh cloudflare`** (also `hh cf`). Same problem at the other end:
 `cloudflared tunnel list` on a host tells you nothing when that host is down.
 
