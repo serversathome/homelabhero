@@ -1,0 +1,103 @@
+name: Docs
+
+# Documentation drifts silently: nothing fails when a page describes a command
+# that was renamed or removed, so it just quietly becomes wrong. These checks
+# make that a build failure instead.
+#
+# Deliberately narrow. This does not review prose - it only asserts the things
+# that are mechanically knowable: that every command a page mentions exists,
+# that every link resolves, and that an integration with a broker has a page.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: every hh subcommand the docs mention must exist
+        run: |
+          set -uo pipefail
+          # What bin/hh actually dispatches, from its own case statement.
+          sed -n '/^main() {/,/^}/p' bin/hh \
+            | grep -oE '^[[:space:]]+[a-z|-]+\)' | tr -d ' )' | tr '|' '\n' \
+            | sort -u > /tmp/real.txt
+          # `version` is dispatched as `version|--version|-V`, which the pattern
+          # above does not catch because of the uppercase V.
+          echo version >> /tmp/real.txt
+          sort -u -o /tmp/real.txt /tmp/real.txt
+
+          grep -rhoE '\bhh [a-z][a-z-]+' README.md docs/ ops/ 2>/dev/null \
+            | awk '{print $2}' | sort -u > /tmp/doc.txt
+
+          if missing="$(comm -23 /tmp/doc.txt /tmp/real.txt)" && [ -n "$missing" ]; then
+            echo "::error::documentation references hh subcommands that do not exist:"
+            echo "$missing" | sed 's/^/  /'
+            exit 1
+          fi
+          echo "ok: every documented hh subcommand exists"
+
+      - name: every broker op the docs mention must exist
+        run: |
+          set -uo pipefail
+          fail=0
+          for b in unifi firewalla netbird cloudflare; do
+            [ -f "bin/hh-$b" ] || continue
+            sed -n '/^case "\$OP" in/,/^esac/p' "bin/hh-$b" \
+              | grep -oE '^[[:space:]]+[a-z|_-]+\)' | tr -d ' )' | tr '|' '\n' \
+              | sort -u > /tmp/real_op.txt
+            # `hh cf` is an alias for `hh cloudflare`.
+            pat="$b"; [ "$b" = cloudflare ] && pat="(cloudflare|cf)"
+            grep -rhoE "\bhh $pat [a-z][a-z-]+" README.md docs/ ops/ 2>/dev/null \
+              | awk '{print $3}' | sort -u > /tmp/doc_op.txt
+            if missing="$(comm -23 /tmp/doc_op.txt /tmp/real_op.txt)" && [ -n "$missing" ]; then
+              echo "::error::docs reference hh $b ops that do not exist:"
+              echo "$missing" | sed 's/^/  /'
+              fail=1
+            fi
+          done
+          [ "$fail" -eq 0 ] && echo "ok: every documented broker op exists"
+          exit "$fail"
+
+      - name: internal links must resolve
+        run: |
+          python3 - <<'PY'
+          import re, os, sys
+          bad = 0
+          for root, dirs, files in os.walk('.'):
+              dirs[:] = [d for d in dirs if d != '.git']
+              for fn in files:
+                  if not fn.endswith('.md'):
+                      continue
+                  p = os.path.join(root, fn)
+                  for m in re.finditer(r'\[([^\]]+)\]\((?!https?:|mailto:|#)([^)#]+)(#[^)]*)?\)',
+                                       open(p, encoding='utf-8').read()):
+                      tgt = os.path.normpath(os.path.join(os.path.dirname(p), m.group(2)))
+                      if not os.path.exists(tgt):
+                          print(f"::error file={p}::broken link -> {m.group(2)}")
+                          bad += 1
+          print("ok: every internal link resolves" if not bad else f"{bad} broken link(s)")
+          sys.exit(1 if bad else 0)
+          PY
+
+      - name: every integration with a broker needs a docs page
+        run: |
+          set -euo pipefail
+          fail=0
+          for f in bin/hh-*; do
+            b="${f#bin/hh-}"
+            case "$b" in connect|provision|update) continue ;; esac
+            if [ ! -f "docs/integrations/${b}.md" ]; then
+              echo "::error::bin/hh-${b} exists but docs/integrations/${b}.md does not"
+              fail=1
+            fi
+          done
+          [ "$fail" -eq 0 ] && echo "ok: every integration has a docs page"
+          exit "$fail"

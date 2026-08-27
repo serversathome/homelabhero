@@ -24,6 +24,63 @@ easy to get wrong and changes if a date is added to the heading.
 When adding a version, keep the three in sync: the anchor (`v1-1-0`), the git
 tag (`v1.1.0`), and `HH_VERSION` in `bin/hh` (`1.1.0`).
 
+<a id="v1-5-2"></a>
+
+## 1.5.2 (2026-08-27)
+
+Documentation restructure, and one fix.
+
+### The README is now an entry point, not the manual
+
+It had grown to 31 KB - 582 lines - and the shape of the growth was the problem
+rather than the size: each new integration added about 2.5 KB in the middle,
+pushing the part a new reader actually needs (what this is, and whether it is
+safe) further under router-specific reference material.
+
+It is now 5 KB: what it is, install, what it can do, why the credentials are
+safe, and a table of links. Everything else moved to `docs/`, unedited except
+where the split broke a cross-reference:
+
+    docs/install.md          first install, discovery, registering hosts
+    docs/commands.md         every hh subcommand
+    docs/security.md         credential isolation, what the agent knows,
+                             how strongly each integration is fenced
+    docs/updating.md         hh update, the weekly job, hh doctor
+    docs/layout.md           where things live, platform notes, backup
+    docs/integrations/       unifi, firewalla, netbird, cloudflare
+
+`docs/security.md` gains two sections that did not exist anywhere a reader on
+GitHub would find them: the three fencing tiers (UniFi and Firewalla cannot
+write at all; NetBird and Cloudflare can, behind named ops and `--force`;
+`hh run` on a shell host can do anything, gated only by the permission prompt),
+and an explicit list of what the security model does NOT protect against.
+
+In-repo rather than a GitHub wiki, deliberately. A wiki is a separate git
+repository: doc changes cannot be reviewed in the same pull request as the code
+they describe, and a page can only ever describe HEAD, so someone on an older
+release reads about behaviour they do not have.
+
+### A CI job that makes the split safe to keep
+
+Documentation drifts silently - nothing fails when a page describes a command
+that was renamed - so `.github/workflows/docs.yml` asserts the parts that are
+mechanically knowable:
+
+- every `hh` subcommand mentioned anywhere in `README.md`, `docs/` or `ops/`
+  exists in the dispatch table in `bin/hh`;
+- every broker op mentioned exists in that broker's own dispatch table;
+- every internal markdown link resolves;
+- every `bin/hh-<name>` broker has a `docs/integrations/<name>.md`.
+
+All four were verified to actually fail on planted drift, not merely to pass.
+
+### Fixed
+
+`ops/.claude/skills/security-audit/SKILL.md` pointed at "the top-level README",
+which is never installed - `setup/main.sh` rsyncs only `ops/` to the box. It now
+points at `CLAUDE.md` and the capability catalogs, which are installed, and
+names the section that answers the question it raises.
+
 <a id="v1-5-1"></a>
 
 ## 1.5.1 (2026-08-27)
