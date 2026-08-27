@@ -12,7 +12,7 @@
 #
 set -euo pipefail
 
-HH_VERSION="1.5.0"
+HH_VERSION="1.5.1"
 REG_DIR="/etc/homelabhero/hosts.d"
 VAULT_DIR="/etc/homelabhero/vault"
 # Pristine copy of the ops files HomelabHero ships, as last delivered. Diffing
@@ -333,6 +333,13 @@ _tls_pin() {
     | openssl base64 2>/dev/null)" || true
   pin="${pin//[[:space:]]/}"
   [ -n "$pin" ] && printf 'sha256//%s' "$pin"
+  # Return success even when there was nothing to print. Not being able to read
+  # a certificate is a normal outcome here - the host may be down, or may not
+  # speak TLS on that port - and the callers all treat an empty pin as "carry on
+  # unpinned". Without this the function's last statement is the [ -n ] test, so
+  # it returns 1, and any caller that forgot `|| true` would abort the whole
+  # registration under `set -e` over something that was never an error.
+  return 0
 }
 
 # Privilege prefix for a host. Root => empty (runs bare). A non-root connect user

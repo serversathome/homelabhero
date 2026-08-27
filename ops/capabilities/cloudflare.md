@@ -99,8 +99,15 @@ to read: `hh run <host> "cat /etc/cloudflared/config.yml"`.
 ## Writes - confirm before running
 
 - Create or update a record: `hh cloudflare dns-set <zone> <type> <name>
-  <content> [ttl|auto] [on|off]` - **--force** if it repoints a record currently
-  aimed at this machine
+  <content> [ttl|auto] <on|off>` - **--force** if it repoints a record currently
+  aimed at this machine.
+
+  The `on|off` is proxying and is **required for A, AAAA and CNAME**. Both
+  settings are ordinary: a tunnel CNAME must be proxied, and a record pointing
+  at a reverse proxy you run yourself is usually meant to be grey-clouded. Which
+  one is right depends on what the record is for, so the op refuses rather than
+  choosing - guessing wrong on a tunnel record gives a hostname that resolves
+  and serves nothing.
 - Proxy on or off: `hh cloudflare dns-proxy <zone> <name> on|off` - **--force**
   to turn OFF, which exposes the origin address in public DNS
 - Delete a record: `hh cloudflare dns-delete <zone> <name> [type]` **--force**

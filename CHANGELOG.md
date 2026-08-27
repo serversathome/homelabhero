@@ -24,6 +24,69 @@ easy to get wrong and changes if a date is added to the heading.
 When adding a version, keep the three in sync: the anchor (`v1-1-0`), the git
 tag (`v1.1.0`), and `HH_VERSION` in `bin/hh` (`1.1.0`).
 
+<a id="v1-5-1"></a>
+
+## 1.5.1 (2026-08-27)
+
+A full audit pass over both brokers, with shellcheck and by hand. shellcheck is
+clean at warning level on each; everything below is the kind of defect it cannot
+see.
+
+**One signature changed.** `hh cloudflare dns-set` now REQUIRES the `on|off`
+proxying argument for A, AAAA and CNAME records, where it previously defaulted
+to off.
+
+The reason is that a homelab legitimately needs BOTH settings on the same zone,
+and which one is right depends entirely on what the record is for:
+
+- a CNAME to `<tunnel-id>.cfargotunnel.com` **must** be proxied - a tunnel
+  hostname does not work any other way;
+- a record pointing at a reverse proxy you run yourself (nginx proxy manager,
+  Caddy, Traefik) is usually meant to be **grey-clouded**, so that your proxy
+  terminates the connection rather than Cloudflare.
+
+Both are ordinary and deliberate. So whichever way a default went it would be
+silently wrong for the other half of the records, and the tunnel half fails
+nastily: the hostname resolves, serves nothing, and reads as a broken tunnel
+rather than a wrong record. There is no default because there is no answer that
+holds for both, and the op says so and shows both forms instead of choosing.
+
+(A secondary point, not the reason: an unproxied record publishes the origin
+address, which `dns-proxy off` asks for `--force` before doing. That matters
+less here, because grey-clouding is usually the intent rather than a slip.)
+
+By the letter of the rule at the top of this file, changing the signature of an
+existing command is breaking and therefore major. It ships as a patch
+deliberately: `dns-set` has existed only since 1.4.0, released the same day.
+
+A full pass over the two brokers with shellcheck and by hand. Nothing was
+broken in a way that lost data, but four things were wrong:
+
+- **The `--force` retry hint did not requote arguments.** `${ARGS[*]}` joins on
+  spaces, so a value that contains one - `rename mesh laptop "my new name"` -
+  printed as three arguments, and pasting the offered line would have run a
+  different command than the one it was offered for. A confirmation step whose
+  printed command does something else is worse than none. Each argument is now
+  requoted, embedded single quotes included.
+- **The audit log did not record `--force`.** A destructive command that was
+  refused and one that was carried out logged identically, and telling those
+  apart afterwards is most of what that log is for.
+- **Cloudflare's zone substring fallback was a no-op.** It re-ran the same exact
+  query with `match=any`, which only says whether filters are ANDed or ORed;
+  the zone list has no "contains" parameter at all. Matching now happens here,
+  so `records exampl` finds `example.com` as the comment always claimed.
+- **`dns-set` could create an exposed record with no confirmation**, while
+  `dns-proxy off` demanded `--force` for the identical exposure. Proxying is now
+  a required argument for A, AAAA and CNAME rather than defaulting to off.
+  Neither default is safe: off publishes the origin address, and on is mandatory
+  for a CNAME to `<tunnel-id>.cfargotunnel.com`. There is no safe default, so
+  there is no default.
+
+Also hardened `_tls_pin`, whose last statement was a test that returns 1 when no
+certificate could be read. Every existing caller guards it with `|| true`, so
+nothing was failing - but a future one that forgot would have aborted a whole
+registration under `set -e` over an outcome that is normal.
+
 <a id="v1-5-0"></a>
 
 ## 1.5.0 (2026-08-27)

@@ -100,7 +100,7 @@ ops (`zones`, `records`) never need it.
 These exist only when the alias was registered with an Edit token. With a Read
 token they refuse immediately and explain why, without making a request.
 
-    hh cloudflare dns-set <zone> <type> <name> <content> [ttl] [on|off]
+    hh cloudflare dns-set <zone> <type> <name> <content> [ttl] <on|off>
     hh cloudflare dns-proxy <zone> <name> on|off
     hh cloudflare dns-delete <zone> <name> [type]
     hh cloudflare tunnel-route <tunnel> <hostname> <service>
@@ -111,6 +111,19 @@ token they refuse immediately and explain why, without making a request.
 `dns-set` creates the record if it is absent and updates it if it is present, so
 it is the one op for "point this name at that". A bare label is expanded against
 the zone: `home` in zone `example.com` means `home.example.com`.
+
+**Proxying is required for A, AAAA and CNAME**, not defaulted, and the op
+refuses without it. Both settings are ordinary and the right one depends on the
+record:
+
+- a CNAME to `<tunnel-id>.cfargotunnel.com` **must** be `on` - a tunnel hostname
+  does not work unproxied;
+- a record pointing at a reverse proxy the user runs themselves (nginx proxy
+  manager, Caddy, Traefik) is usually `off`, so their proxy terminates the
+  connection rather than Cloudflare.
+
+Do not guess on the user's behalf. If the target is a `cfargotunnel.com` name
+it is `on`; otherwise ask what the record is for rather than assuming.
 
 ### The rules for writing
 
