@@ -51,6 +51,12 @@ Cloudflare before concluding a service is unpublished, and `cloudflare-ops`
 notes that a service missing from `tunnel-show` may simply be published through
 NetBird instead.
 
+A management server older than 0.72 answers 404 on every path under
+`/api/reverse-proxies`. The named BYOP ops say so plainly and exit clean, rather
+than relaying a bare HTTP 404; `summary` simply omits its BYOP lines. `hh
+netbird get` still reports the 404 verbatim, because someone typing a path by
+hand wants to know exactly what came back.
+
 `hh netbird get` now refuses the `proxy-tokens` endpoints. A proxy access
 token's plaintext is shown once at creation and registers a proxy against the
 whole account; NetBird's docs do not say whether the list endpoint returns it,

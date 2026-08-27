@@ -660,8 +660,26 @@ op_events() {
 # column whose name changed is a much better failure than one that dies.
 BYOP="${API}/reverse-proxies"
 
+# BYOP arrived in NetBird 0.72. A management server older than that - or a
+# self-hosted build without the reverse proxy - answers 404 on every path under
+# /api/reverse-proxies. That is a fact about the deployment rather than a fault,
+# so these three say so plainly instead of relaying a bare HTTP 404, the same
+# way `traffic` explains a plan it is not on. Only these named ops get the
+# softer message: `hh netbird get` still reports the 404 verbatim, because
+# someone typing a path by hand wants to know exactly what came back.
+_byop_read() {
+  local out rc=0
+  out="$(_read "$1" 2>/dev/null)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "Bring Your Own Proxy is not available on this NetBird." >&2
+    echo "(BYOP needs NetBird 0.72 or newer. Everything else here works regardless.)" >&2
+    return 1
+  fi
+  printf '%s' "$out"
+}
+
 op_proxies() {
-  local j; j="$(_read "${BYOP}/clusters")"
+  local j; j="$(_byop_read "${BYOP}/clusters")" || return 0
   _expect_array "$j" "${BYOP}/clusters"
   if [ "$(printf '%s' "$j" | jq -r 'length')" -eq 0 ]; then
     echo "No reverse-proxy clusters registered (BYOP is not in use on this account)."
@@ -678,7 +696,7 @@ op_proxies() {
 }
 
 op_services() {
-  local j; j="$(_read "${BYOP}/services")"
+  local j; j="$(_byop_read "${BYOP}/services")" || return 0
   _expect_array "$j" "${BYOP}/services"
   if [ "$(printf '%s' "$j" | jq -r 'length')" -eq 0 ]; then
     echo "No services published through a NetBird reverse proxy."
@@ -696,12 +714,13 @@ op_services() {
 
 op_service() {
   [ "$#" -ge 1 ] || die "usage: hh netbird service [alias] <name-or-id>"
-  local all; all="$(_read "${BYOP}/services")"; _expect_array "$all" "${BYOP}/services"
+  local all; all="$(_byop_read "${BYOP}/services")" || return 0
+  _expect_array "$all" "${BYOP}/services"
   _resolve_one "$1" "$all" "service" | jq '.'
 }
 
 op_domains() {
-  local j; j="$(_read "${BYOP}/domains")"
+  local j; j="$(_byop_read "${BYOP}/domains")" || return 0
   _expect_array "$j" "${BYOP}/domains"
   if [ "$(printf '%s' "$j" | jq -r 'length')" -eq 0 ]; then
     echo "No apex domains registered for reverse proxying."
