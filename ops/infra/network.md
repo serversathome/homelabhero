@@ -73,13 +73,17 @@ firewalla-ops skill and `capabilities/firewalla.md`.
 
 ## NetBird mesh
 
+    hh netbird summary                       # control plane: peers, offline, drift
+    hh netbird peers                         # last seen, agent version, groups
     netbird status                           # on this box: peer list, connection state
     hh run <alias> "netbird status"             # same, from the far end
     # If a host is unreachable by mesh IP but pingable on LAN, the mesh peer is
-    # down, not the host.
+    # down, not the host. `hh netbird peers` says so without needing the host.
 
 ## Cloudflare Tunnels
 
+    hh cloudflare summary                    # edge view: which tunnels are healthy
+    hh cloudflare tunnel-show <name>         # hostname -> service ingress table
     hh run <tunnel-host> "cloudflared tunnel list"
     hh run <tunnel-host> "systemctl status cloudflared"
     hh run <tunnel-host> "journalctl -u cloudflared -n 80 --no-pager"

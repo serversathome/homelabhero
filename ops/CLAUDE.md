@@ -24,21 +24,35 @@ through a broker that holds the credentials for you:
     hh scan [cidr]                # discover live endpoints on the network (read-only)
     hh unifi <op> [alias]         # read the UniFi router/console (READ-ONLY)
     hh firewalla <op> [alias]     # read the Firewalla via MSP (READ-ONLY)
+    hh netbird <op> [alias]       # read AND manage the NetBird mesh
+    hh cloudflare <op> [alias]    # read AND manage Cloudflare DNS/tunnels/Access
 
 hh run works the same for every host: TrueNAS, Proxmox, and any Linux box are all
 reached as a normal shell over SSH.
 
-## The router is different, and it is read-only
+## Four things are reached over an API, not a shell
 
-A router is reached over an HTTP API rather than SSH, so `hh run` does not work
-on it. Two kinds are supported, and `hh list` shows which is registered:
+These are reached over an HTTP API rather than SSH, so `hh run` does not work on
+them. `hh list` shows which are registered, and an ACCESS column saying what
+each one's credential may do:
 
-- platform `unifi` - a UniFi console on the LAN. Use `hh unifi <op>`, starting
-  with `hh unifi summary`.
-- platform `firewalla` - a Firewalla, read through Firewalla MSP. Use
-  `hh firewalla <op>`, starting with `hh firewalla summary`.
+- platform `unifi` - a UniFi console on the LAN. `hh unifi summary`.
+- platform `firewalla` - a Firewalla, via Firewalla MSP. `hh firewalla summary`.
+- platform `netbird` - the NetBird mesh, via its management API.
+  `hh netbird summary`.
+- platform `cloudflare` - DNS, Tunnels and Access. `hh cloudflare summary`.
 
-`hh overview` and `hh inventory` already include either one.
+`hh overview` and `hh inventory` already include all of them.
+
+**The first two are read-only. The last two are not.** That split is
+deliberate, and the reason is worth holding on to: a router is the one device
+whose failure takes away the access you would need to fix it, so UniFi and
+Firewalla are read-only by construction. An overlay network and a DNS zone are
+not like that - approving a peer or repointing a record is routine and
+reversible - so NetBird and Cloudflare can be changed, under rules set out
+below.
+
+## The router is read-only
 
 That access is READ-ONLY and cannot be talked into being anything else. There is
 no command that restarts a device, edits a VLAN, SSID, firewall rule, port
@@ -59,7 +73,36 @@ and firewalla-ops skills cover this.
 One caveat specific to Firewalla: it is read through Firewalla's cloud, so when
 the internet is down `hh firewalla` is down with it. A failure there is not
 evidence that the router is broken - say which of the two you have actually
-established.
+established. The same caveat applies to NetBird Cloud and to Cloudflare.
+
+## NetBird and Cloudflare can be changed - the rules
+
+Whether a given alias may write at all depends on the credential it was
+registered with; `hh list` says so, and a read-only one refuses every write
+immediately rather than failing at the far end.
+
+When it may:
+
+1. **Anything destructive refuses without `--force`, and that refusal is the
+   confirmation step.** It prints exactly what would change. Do not re-run it
+   with `--force` on your own initiative - relay what it said, in your own
+   words, and let the user decide. Then run it.
+2. **There is no generic write op.** No `post`, `put`, or `raw` on either. If
+   what someone wants is not a named op, say so and describe the dashboard
+   steps. Do not go looking for a way around it.
+3. **Some things are refused outright and stay refused.** `hh netbird
+   key-create` will not run without a terminal, because the plaintext setup key
+   exists only in that one response. `hh cloudflare get` refuses the endpoints
+   that return a tunnel token. Both would put a live credential into this
+   transcript. Tell the user to run it themselves.
+4. **Never remove the command center's own NetBird peer, or repoint DNS that
+   points at this machine, without being very sure.** Both brokers recognise
+   these cases and say so - they are how you are reaching everything else.
+5. **Publishing a service through Cloudflare takes two steps**: `tunnel-route`
+   for the ingress rule, then `dns-set` for the CNAME. It is not published
+   after only the first, so do not report that it is.
+
+The netbird-ops and cloudflare-ops skills cover the rest.
 
 Hosts are reached as root by default, so commands run directly - no sudo needed.
 `hh list` shows the connect user per host. Some hosts (notably TrueNAS) may
@@ -117,6 +160,8 @@ Read the relevant one so you use the whole toolset, not just the basics:
 @capabilities/linux.md
 @capabilities/unifi.md
 @capabilities/firewalla.md
+@capabilities/netbird.md
+@capabilities/cloudflare.md
 
 These describe what each system can do and the exact commands to inspect or
 manage every subsystem, all runnable through hh run.
@@ -149,10 +194,18 @@ When the failing layer is not obvious, work outward:
 1. The app or container -> docker-stack-ops skill
 2. The host it runs on (Proxmox node or TrueNAS) -> proxmox-ops / truenas-ops
 3. Storage underneath it (ZFS pool, dataset, disk) -> truenas-ops
-4. The network between them (mesh, switch, gateway, DNS, tunnels) -> network-diag
-5. The fabric itself, seen from the router (WAN, APs, switches, clients,
+4. The overlay it is reached over (NetBird peers, groups, policies) ->
+   netbird-ops
+5. The edge it is published through (tunnels, DNS records, Access) ->
+   cloudflare-ops
+6. The network in between (DNS resolution, host interfaces, routes) ->
+   network-diag
+7. The fabric itself, seen from the router (WAN, APs, switches, clients,
    VLANs, devices, traffic, rules) -> unifi-ops or firewalla-ops, whichever
    router is registered
+
+Steps 4, 5 and 7 each have a control plane that answers even when the host in
+question does not, which is why they come before digging into the host.
 
 Cross-cutting skills that sit outside the ladder: backup-restore (snapshot,
 restore, roll back, verify recoverability), patch-management (update hosts and

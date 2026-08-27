@@ -1,11 +1,25 @@
-# HomelabHero: the low-privilege agent user may run ONLY these four helpers,
-# and ONLY as the vault user. hh-connect opens SSH connections; hh-unifi reads a
-# UniFi console over its API and hh-firewalla reads a Firewalla over the MSP
-# API, and neither is capable of changing anything there; hh-provision registers
-# a host with a generated key. None of them exposes any secret. Installed to
-# /etc/sudoers.d/homelabhero (mode 0440), validated by visudo.
-Cmnd_Alias HH_BROKER    = /usr/local/bin/hh-connect
-Cmnd_Alias HH_UNIFI     = /usr/local/bin/hh-unifi
-Cmnd_Alias HH_FIREWALLA = /usr/local/bin/hh-firewalla
-Cmnd_Alias HH_PROVISION = /usr/local/bin/hh-provision
-hhagent ALL=(hhvault) NOPASSWD: HH_BROKER, HH_UNIFI, HH_FIREWALLA, HH_PROVISION
+# HomelabHero: the low-privilege agent user may run ONLY these six helpers, and
+# ONLY as the vault user. None of them exposes any secret.
+#
+#   hh-connect     opens SSH connections to registered hosts
+#   hh-unifi       reads a UniFi console over its API - READ-ONLY by construction
+#   hh-firewalla   reads a Firewalla over the MSP API - READ-ONLY by construction
+#   hh-netbird     reads AND manages a NetBird mesh over its API
+#   hh-cloudflare  reads AND manages Cloudflare DNS, tunnels and Access
+#   hh-provision   registers a host with a generated key
+#
+# The last two can change things, which the first four cannot. That is contained
+# inside those brokers rather than here: neither has a generic write path, only
+# named ops with hardcoded methods and paths, and anything destructive refuses
+# without --force. Whether a given alias may write at all also depends on the
+# credential it was registered with. sudoers grants the ability to RUN the
+# broker; it is the broker that decides what may be asked of it.
+#
+# Installed to /etc/sudoers.d/homelabhero (mode 0440), validated by visudo.
+Cmnd_Alias HH_BROKER     = /usr/local/bin/hh-connect
+Cmnd_Alias HH_UNIFI      = /usr/local/bin/hh-unifi
+Cmnd_Alias HH_FIREWALLA  = /usr/local/bin/hh-firewalla
+Cmnd_Alias HH_NETBIRD    = /usr/local/bin/hh-netbird
+Cmnd_Alias HH_CLOUDFLARE = /usr/local/bin/hh-cloudflare
+Cmnd_Alias HH_PROVISION  = /usr/local/bin/hh-provision
+hhagent ALL=(hhvault) NOPASSWD: HH_BROKER, HH_UNIFI, HH_FIREWALLA, HH_NETBIRD, HH_CLOUDFLARE, HH_PROVISION

@@ -75,7 +75,8 @@ Both accept the same API key. The integration API needs Network 9.0 or newer.
 ## What UniFi cannot tell you
 
 The console knows the fabric and the gear on it. It does not know about the
-NetBird mesh, DNS resolution, Cloudflare tunnels, or anything happening inside
+NetBird mesh (see `netbird.md`), Cloudflare tunnels (see `cloudflare.md`), DNS
+resolution, or anything happening inside
 a host. For those, use the network-diag skill and `hh run` against the hosts
 themselves. A service can be perfectly healthy in UniFi's view and still be
 unreachable over the mesh.

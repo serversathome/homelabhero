@@ -24,6 +24,95 @@ easy to get wrong and changes if a date is added to the heading.
 When adding a version, keep the three in sync: the anchor (`v1-1-0`), the git
 tag (`v1.1.0`), and `HH_VERSION` in `bin/hh` (`1.1.0`).
 
+<a id="v1-4-0"></a>
+
+## 1.4.0 (2026-08-27)
+
+Two new networking integrations, and the first two that can change something.
+
+**NetBird mesh - `hh netbird`.** HomelabHero could already reach hosts over the
+mesh; it could not see the mesh itself except by asking one peer
+(`hh run <alias> "netbird status"`), which is one peer's opinion and is
+unavailable exactly when it matters - when the host you would ask is the host
+that is down. This asks NetBird's management API instead.
+
+Reads: `summary ping info peers peer groups networks routers resources policies
+policy-show dns keys posture events traffic get`. `hh netbird summary` names
+offline peers and how long they have been gone, peers waiting on approval, and
+peers running an older agent than the rest of the fleet - the last being the
+most common cause of a mesh that works unevenly, and invisible from any one
+peer. Built on `/api/networks` rather than the Routes resource NetBird has
+deprecated.
+
+Writes (Admin service-user token only): `rename approve ssh expiration
+group-add group-rm policy-enable policy-disable key-create key-revoke rm-peer
+rm-policy rm-group`.
+
+**Cloudflare - `hh cloudflare`** (also `hh cf`). Same problem at the other end:
+`cloudflared tunnel list` on a host tells you nothing when that host is down.
+
+Reads: `summary ping info zones records tunnels tunnel-show access-apps get`.
+`tunnel-show` prints the hostname-to-service ingress table, which is usually the
+answer to "why does this name not reach my service", and says so plainly when a
+tunnel is locally managed and its ingress lives in a file on the host instead.
+
+Writes (Edit token only): `dns-set dns-proxy dns-delete tunnel-route
+tunnel-unroute purge access-revoke`. `dns-set` creates or updates in one op and
+expands a bare label against the zone.
+
+### The write model
+
+UniFi and Firewalla remain read-only by construction and are not changing. A
+router is the one device whose failure takes away the access you would need to
+fix it. An overlay network and a DNS zone are not like that, so these two can be
+changed - under fences that are part of the design, not conventions:
+
+- **No generic write path.** Reads keep their `get` escape hatch, because a GET
+  nobody anticipated is still only a GET. Writes have no equivalent: every one
+  is a named op with a method and path hardcoded in the broker, so an endpoint
+  nobody wrote an op for cannot be written to.
+- **The verb is never derived from input.** `_read` hardcodes GET; each write
+  wrapper hardcodes its own verb and passes it as a literal that is re-checked
+  against an allowlist.
+- **Destructive ops refuse without `--force`**, printing exactly what they would
+  have done. That refusal is the confirmation step, and it works in a
+  non-interactive session where a y/N prompt would not.
+- **Self-inflicted outages get a louder refusal**: removing the command center's
+  own NetBird peer, or repointing a DNS record that currently points at it.
+- **Two things are refused outright.** `hh netbird key-create` will not run
+  without a terminal, because NetBird returns a setup key's plaintext exactly
+  once. `hh cloudflare get` refuses the endpoints that return a tunnel token.
+  Both would otherwise put a live credential into a transcript.
+
+A read-only credential is fully supported for both - the registry records what
+each token may do, and a read-only alias refuses every write immediately without
+making a request.
+
+### Also in this release
+
+- `hh list` gains an ACCESS column saying whether each entry is `shell`,
+  `read-only`, or `READ/WRITE`.
+- Platform detection is keyed off `PLATFORM` throughout. It previously
+  identified UniFi by `AUTH=apikey`, which was unambiguous while UniFi was the
+  only credentialled API host and would have matched three things once NetBird
+  and Cloudflare arrived.
+- `hh repin` now also covers a self-hosted NetBird management server presenting
+  its own certificate, and explains itself instead of erroring on platforms that
+  have no pin to refresh.
+- No read op is a prefix of a write op, in either integration. Claude's
+  permission rules match on a command prefix, so allow-listing `hh cloudflare
+  dns` would have silently granted `dns-set`, `dns-proxy` and `dns-delete`. The
+  read ops affected were renamed (`records`, `tunnel-show`, `access-apps`,
+  `policy-show`); the older names still work when typed, they are simply not
+  allow-listed.
+- The agent permission set allows the read ops of both integrations and leaves
+  every write op to prompt. `hh add-netbird` and `hh add-cloudflare` are denied
+  outright, like the other registration commands.
+- `network-diag`, `unifi-ops`, `firewalla-ops` and the capability catalogs no
+  longer say the mesh and tunnels are invisible, because they are not. New
+  skills `netbird-ops` and `cloudflare-ops`, new catalogs
+  `capabilities/netbird.md` and `capabilities/cloudflare.md`.
+
 <a id="v1-3-3"></a>
 
 ## 1.3.3 (2026-08-25)

@@ -105,6 +105,10 @@ changed, and anything worth knowing before you update.
                                  clients, networks (READ-ONLY, see below)
     hh firewalla <op> [alias]    read your Firewalla: summary, devices, alarms,
                                  flows, bandwidth, rules (READ-ONLY, see below)
+    hh netbird <op> [alias]      read and manage your NetBird mesh: peers, groups,
+                                 policies, routers, DNS, keys (see below)
+    hh cloudflare <op> [alias]   read and manage Cloudflare: DNS records, tunnels,
+                                 Access apps (see below)
     hh doctor                    check the whole setup is healthy
     hh provision <alias> <host> [port] [platform] [user]
                                  register a host with a generated key (UI-safe);
@@ -113,7 +117,10 @@ changed, and anything worth knowing before you update.
     hh add-host                  register a host (operator)
     hh add-unifi                 register your UniFi router with an API key (operator)
     hh add-firewalla             register your Firewalla with an MSP token (operator)
-    hh repin <alias>             re-pin a UniFi console after its cert changed (operator)
+    hh add-netbird               register your NetBird mesh with a service-user token (operator)
+    hh add-cloudflare            register Cloudflare with a scoped API token (operator)
+    hh repin <alias>             re-pin a UniFi console or self-hosted NetBird server
+                                 after its cert changed (operator)
     hh rm-host <alias>           remove a host and its credential
     hh update                    update everything now: HomelabHero + OS (operator)
     hh login                     log Claude Code in as the agent user
@@ -138,15 +145,21 @@ HomelabHero uses privilege separation with a connection broker. Three users:
 
 Claude runs as `hhagent`, which cannot read anything `hhvault` owns. To reach a
 host, Claude runs `hh run`, which invokes the broker `hh-connect` through a single
-narrow sudoers rule (`hhagent` may run only that broker, its read-only router
-siblings `hh-unifi` and `hh-firewalla`, and `hh-provision`, and only as
-`hhvault`).
+narrow sudoers rule (`hhagent` may run only that broker, its API siblings
+`hh-unifi`, `hh-firewalla`, `hh-netbird` and `hh-cloudflare`, and
+`hh-provision`, and only as `hhvault`).
 The broker looks the host up in the non-secret registry, reads the key or password
 from the vault, and opens the connection. Claude gets the output, never the secret.
-A router credential works the same way: `hh-unifi` and `hh-firewalla` read the
-UniFi API key or the Firewalla MSP token from the vault and pass it to curl
-through a config file on stdin, never on the command line, so it never appears
-in `/proc` where the agent user could read it.
+An API credential works the same way: the four API brokers read the UniFi API
+key, Firewalla MSP token, NetBird service-user token or Cloudflare API token
+from the vault and pass it to curl through a config file on stdin, never on the
+command line, so it never appears in `/proc` where the agent user could read it.
+
+Two of those four can also make changes (NetBird and Cloudflare), and sudoers is
+not what limits that - it grants only the ability to RUN a broker. What limits it
+lives inside the brokers themselves: no generic write path, only named ops with
+hardcoded methods and paths, `--force` required on anything destructive, and a
+per-alias record of whether its credential may write at all.
 Even a fully hijacked agent cannot exfiltrate a credential, because the OS will not
 let it read the vault and will not let it run anything but the broker as `hhvault`.
 The broker also refuses loopback targets and unregistered aliases.
@@ -313,6 +326,104 @@ There is no TLS pin here, unlike UniFi: an MSP domain has a publicly trusted
 certificate, so ordinary CA verification already applies and is the stronger
 check.
 
+## Your NetBird mesh (read, and write if you let it)
+
+The mesh is how the command center reaches hosts wherever they are, and until
+now HomelabHero could only see it from inside one peer:
+
+    hh run <alias> "netbird status"
+
+That is one peer's opinion, and it is unavailable exactly when it matters -
+when the host you would ask is the host that is down. Registering NetBird asks
+the control plane instead:
+
+    hh netbird summary
+    hh netbird peers
+    hh netbird policies
+
+`summary` names things rather than counting them: which peers are offline and
+how long they have been, which are waiting for approval, and which are running
+an older agent than the rest of the fleet. That last one is the most common
+cause of a mesh that works unevenly, and it is invisible from any single peer.
+
+Register it from an admin shell:
+
+    hh add-netbird
+
+It asks you to create a NetBird **service user** - a non-interactive account
+made for exactly this - and a token under it. The role you give that service
+user is the important choice:
+
+- **User** is read-only. Every read above still works.
+- **Admin** can also change the mesh, which turns on `approve`, `group-add`,
+  `policy-enable`, `rm-peer` and the rest.
+
+Pick User unless you actually want Claude able to change the mesh. HomelabHero
+records which you chose, and a read-only alias refuses every write immediately
+rather than failing at the far end.
+
+If you pick Admin, here is the honest trade. Every read then runs with a
+credential that could have written, so the broker's shape is the only lock
+rather than the second one. That shape is: no generic write path at all - only
+named ops with methods and paths hardcoded in the broker - and anything
+destructive refuses to run without `--force`, printing exactly what it would
+have done first. Removing the command center's own peer gets a louder refusal
+still, because that is the one change that takes away the mesh you would use to
+undo it.
+
+One thing is refused outright and stays refused: `hh netbird key-create` will
+not run without a terminal. NetBird shows a setup key's plaintext exactly once,
+so running it in an agent session would put the only copy into a transcript.
+
+Self-hosted NetBird works too - give `hh add-netbird` your management host
+instead of `api.netbird.io`, and if it presents its own certificate rather than
+a publicly trusted one, HomelabHero pins it the way it pins a UniFi console.
+
+## Cloudflare: DNS, Tunnels, and Access
+
+Cloudflare is the front door. Same problem as the mesh, same fix: asking the
+host running `cloudflared` tells you nothing when that host is down, and
+Cloudflare's edge answers either way.
+
+    hh cloudflare summary
+    hh cloudflare tunnels
+    hh cloudflare tunnel-show <name>     # which hostname maps to which service
+    hh cloudflare records <zone>
+
+Register it from an admin shell:
+
+    hh add-cloudflare
+
+It asks for a **custom API token** - never the Global API Key, which cannot be
+scoped and would put full account control in the vault. It tells you exactly
+which permissions to tick, and which to use if you want writes as well as
+reads. Scope it to the specific zones your homelab uses while you are there: a
+token scoped to one zone cannot touch another even if something ever reached it
+outside this broker.
+
+With an Edit token you also get `dns-set`, `dns-proxy`, `dns-delete`,
+`tunnel-route`, `tunnel-unroute`, `purge` and `access-revoke`, under the same
+rules as NetBird: named ops only, and `--force` on anything destructive. Two
+extras specific to Cloudflare:
+
+- Repointing a DNS record that currently points at the command center gets the
+  louder refusal, for the same reason removing your own mesh peer does.
+- The read escape hatch refuses the handful of endpoints that return a
+  credential instead of describing one - the tunnel token above all. Everywhere
+  else in HomelabHero "it can only issue a GET" is the whole safety argument;
+  Cloudflare is the one API where that is not quite true, so the broker names
+  those paths and declines them.
+
+### Why not the Cloudflare Claude connector
+
+Cloudflare publishes a remote MCP server that Claude can connect to directly.
+It is a good product, and it is the wrong shape for this: the credential would
+live with the agent instead of in the vault, nothing would constrain which verb
+it used, no line would land in the broker audit log, and none of it would travel
+with the `hh` install or work from cron. The connector is worth adding for
+Cloudflare's *documentation* server, which holds no account access at all. For
+your account, the broker keeps the guarantees the rest of HomelabHero makes.
+
 ## Adding servers from the UI
 
 You do not have to shell in to add machines. Just ask Claude in the browser, e.g.
@@ -400,6 +511,8 @@ auto-update runs it for you after each update.
     │   ├── hh-connect             privileged SSH broker (runs as hhvault)
     │   ├── hh-unifi               read-only UniFi API broker (runs as hhvault)
     │   ├── hh-firewalla           read-only Firewalla MSP broker (runs as hhvault)
+    │   ├── hh-netbird             NetBird mesh broker, read+write (runs as hhvault)
+    │   ├── hh-cloudflare          Cloudflare broker, read+write (runs as hhvault)
     │   ├── hh-provision           key-only host registration (UI-safe add)
     │   └── hh-update              the one update command: git pull + re-run
     │                              installer headless, then OS packages + doctor

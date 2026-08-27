@@ -1,0 +1,884 @@
+#!/usr/bin/env bash
+#
+# hh-cloudflare - HomelabHero Cloudflare API broker.
+#
+# The ingress sibling of hh-netbird. It runs as the vault user (hhvault)
+# through the same narrow sudoers rule, reads a scoped Cloudflare API token the
+# agent user cannot read, and talks to the Cloudflare API on the operator's
+# behalf. It never prints, echoes, or returns the token.
+#
+# WHAT THIS CLOSES. Until now HomelabHero could only see a tunnel from the host
+# running cloudflared - `hh run <host> "cloudflared tunnel list"` - which tells
+# you what that daemon thinks, and tells you nothing at all when the host is
+# down. Cloudflare's own view knows whether the edge still has connections, and
+# it stays answerable when the far end does not.
+#
+# WHY NOT THE CLOUDFLARE MCP CONNECTOR. Cloudflare publishes a remote MCP server
+# that Claude can connect to directly, covering the whole API, read and write,
+# behind an OAuth session Claude itself holds. It is a good product and it is
+# the wrong shape for this: the credential would live with the agent instead of
+# in /etc/homelabhero/vault, nothing would constrain which verb it used, no line
+# would land in the broker audit log, and none of it would travel with the `hh`
+# install or work from cron. A scoped API token behind this broker keeps
+# HomelabHero's guarantees; the connector would quietly retire them.
+#
+# READ AND WRITE, DELIBERATELY, AND THE SAME FENCES AS hh-netbird:
+#
+#   * THE VERB IS NEVER DERIVED FROM INPUT. _read hardcodes -X GET.
+#     _post/_put/_patch/_delete each hardcode their own verb and pass it as a
+#     literal to _write, which re-checks it against a literal allowlist.
+#   * THERE IS NO GENERIC WRITE ESCAPE HATCH. Every write is a named op with a
+#     hardcoded path and a body built here with jq.
+#   * DESTRUCTIVE OPS NEED --force, and the refusal prints exactly what it
+#     would have done, so a person sees the change before it happens.
+#
+# ONE THING THAT IS TRUE HERE AND NOT IN THE OTHER BROKERS. Everywhere else in
+# HomelabHero, "it can only issue a GET" is the whole safety argument, because a
+# GET only ever reads. That is NOT true of Cloudflare: a handful of GETs return
+# credentials rather than describe them, and
+#
+#     GET /accounts/{id}/cfd_tunnel/{id}/token
+#
+# hands back the token that lets anyone run a connector for your tunnel. So the
+# read escape hatch here carries a denylist that the other brokers do not need,
+# and `get` refuses those paths outright. Read `_deny_secret_path` before adding
+# an endpoint to it: the premise "a GET is safe" is an assumption this one API
+# breaks, and the denylist is the only thing standing in for it.
+#
+# THE TOKEN. HomelabHero asks for a CUSTOM API token, never the Global API Key,
+# which cannot be scoped and would put full account control in the vault. The
+# permissions to grant are named in `hh add-cloudflare`; a read-only token
+# (Zone:Read, DNS:Read, Cloudflare Tunnel:Read, Access: Apps and Policies:Read)
+# is enough for every read op here and is recorded as WRITE=no, in which case
+# the write ops refuse up front instead of letting you discover it from a 403.
+#
+# Usage: hh-cloudflare <op> <alias> [args...]
+#
+set -euo pipefail
+
+REG_DIR="/etc/homelabhero/hosts.d"
+VAULT_DIR="/etc/homelabhero/vault"
+AUDIT_LOG="/var/log/homelabhero-broker.log"
+NAME_RE='^[A-Za-z0-9._-]+$'
+TIMEOUT=20
+
+# Everything lives under /client/v4.
+API="/client/v4"
+
+die() { printf 'hh-cloudflare: %s\n' "$*" >&2; exit 2; }
+
+[ "$#" -ge 2 ] || die "usage: hh-cloudflare <op> <alias> [args...]"
+OP="$1"; ALIAS="$2"; shift 2
+
+[[ "$ALIAS" =~ $NAME_RE ]] || die "invalid alias"
+CONF="${REG_DIR}/${ALIAS}.conf"
+[ -f "$CONF" ] || die "no such registered host: ${ALIAS}"
+
+# Pull --force / --yes out before any op sees it, so an op never has to think
+# about where in its own arguments the flag might have landed.
+FORCE=0
+ARGS=()
+for a in "$@"; do
+  case "$a" in
+    --force|--yes) FORCE=1 ;;
+    *) ARGS+=("$a") ;;
+  esac
+done
+set -- ${ARGS[@]+"${ARGS[@]}"}
+RETRY="hh cloudflare ${OP} ${ALIAS}${ARGS[0]+ ${ARGS[*]}}"
+
+# Parse the registry entry safely (no sourcing). Only known keys are accepted.
+HOST=""; PORT="443"; AUTH=""; CRED=""; PLATFORM=""; ACCOUNT=""; ACCOUNT_NAME=""; WRITE=""
+while IFS= read -r line || [ -n "$line" ]; do
+  case "$line" in ''|\#*) continue ;; *=*) : ;; *) continue ;; esac
+  key="${line%%=*}"; val="${line#*=}"
+  key="${key//[[:space:]]/}"
+  val="${val%\"}"; val="${val#\"}"; val="${val## }"; val="${val%% }"
+  case "$key" in
+    HOST)         HOST="$val" ;;
+    PORT)         PORT="$val" ;;
+    AUTH)         AUTH="$val" ;;
+    CRED)         CRED="$val" ;;
+    PLATFORM)     PLATFORM="$val" ;;
+    ACCOUNT)      ACCOUNT="$val" ;;
+    ACCOUNT_NAME) ACCOUNT_NAME="$val" ;;
+    WRITE)        WRITE="$val" ;;
+  esac
+done < "$CONF"
+
+[ "$PLATFORM" = "cloudflare" ] || die "'${ALIAS}' is not a Cloudflare host (PLATFORM=${PLATFORM:-none})"
+[ "$AUTH" = "token" ] || die "'${ALIAS}' is not a token host (AUTH=${AUTH:-none})"
+[ -n "$HOST" ] || die "registry entry missing HOST"
+[ -n "$CRED" ] || die "registry entry missing CRED"
+[[ "$PORT" =~ ^[0-9]+$ ]] || die "invalid PORT"
+[[ "$CRED" =~ $NAME_RE ]] || die "invalid credential reference"
+
+case "$HOST" in
+  127.*|::1|localhost|localhost.*) die "refusing loopback target" ;;
+esac
+
+CREDFILE="${VAULT_DIR}/${CRED}"
+[ -f "$CREDFILE" ] || die "credential not found in vault"
+case "$(readlink -f "$CREDFILE")" in
+  "${VAULT_DIR}/"*) : ;;
+  *) die "credential path escapes vault" ;;
+esac
+TOKEN="$(tr -d '\r\n' <"$CREDFILE")"
+[ -n "$TOKEN" ] || die "credential is empty"
+
+BASE="https://${HOST}:${PORT}"
+
+audit() { printf '%s\t%s\tCLOUDFLARE %s\t%s\n' \
+  "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$ALIAS" "$HOST" "$*" \
+  >>"$AUDIT_LOG" 2>/dev/null || true; }
+
+# ---------------------------------------------------------------------------
+# HTTP
+#
+# Cloudflare wraps every response in {success, errors, messages, result}, and
+# the envelope is the authoritative answer: a request can come back 200 with
+# success:false. So the status code is checked AND the envelope is checked, and
+# the error text people actually need is inside the latter.
+_cf_error() {
+  printf '%s' "$1" | jq -r '
+    if (.errors // []) | length > 0
+    then [(.errors // [])[] | "\(.code // "?"): \(.message // "?")"] | join("; ")
+    else "no detail" end' 2>/dev/null || printf 'unparseable response'
+}
+
+_curl() {
+  local -n _args="$1"; local path="$2"
+  local errf resp rc=0
+  errf="$(mktemp)"
+  # The token goes in through a curl config file on stdin, never argv and never
+  # the environment. /proc/<pid>/cmdline is world readable, so a token passed as
+  # -H "Authorization: ..." would be readable by the very agent user this broker
+  # exists to keep it away from.
+  resp="$(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" \
+    | curl -K - "${_args[@]}" "${BASE}${path}" 2>"$errf")" || rc=$?
+  local err; err="$(tr -d '\r' <"$errf")"; rm -f "$errf"
+
+  if [ "$rc" -ne 0 ]; then
+    case "$rc" in
+      6)  die "cannot resolve ${HOST} (expected api.cloudflare.com)" ;;
+      28) die "timed out after ${TIMEOUT}s talking to ${HOST}" ;;
+      7)  die "cannot connect to ${HOST}:${PORT} (is this box online?)" ;;
+      35|51|60) die "TLS verification failed for ${HOST}: ${err:-no detail}
+    api.cloudflare.com has a publicly trusted certificate, so this should not
+    happen. Suspect the network path (a filtering proxy or interception) before
+    the endpoint, and do not work around it by disabling verification." ;;
+      *)  die "request failed (curl ${rc}): ${err:-no detail}" ;;
+    esac
+  fi
+
+  local code="${resp##*$'\n'}" out="${resp%$'\n'*}"
+  case "$code" in
+    2*) : ;;
+    401|403) die "the Cloudflare API token was rejected (HTTP ${code}): $(_cf_error "$out")
+    Check the token has not expired or been rolled, and that it carries the
+    permission this op needs - a Read token cannot make changes. Re-create it at
+    My Profile -> API Tokens, then re-register from an admin shell:
+        hh rm-host ${ALIAS} && hh add-cloudflare" ;;
+    404) die "no such API path, or the token cannot see that object (HTTP 404): ${path}
+    Cloudflare answers 404 rather than 403 for a zone or account the token is
+    not scoped to, so check the token's zone/account resources as well." ;;
+    429) die "rate limited by Cloudflare (HTTP 429); retry in a moment" ;;
+    *)   die "HTTP ${code} from ${path}: $(_cf_error "$out")" ;;
+  esac
+
+  # A 2xx still has to be believed. success:false here is a real failure that
+  # would otherwise be printed as though it were data.
+  if ! printf '%s' "$out" | jq -e '.success == true' >/dev/null 2>&1; then
+    # Some endpoints (notably DELETE) answer with a bare result and no success
+    # key at all; only treat an explicit success:false as an error.
+    if printf '%s' "$out" | jq -e 'has("success")' >/dev/null 2>&1; then
+      die "Cloudflare refused the request: $(_cf_error "$out")"
+    fi
+  fi
+  printf '%s' "$out"
+}
+
+# Perform one GET and print the response body. Extra arguments are query
+# parameters as name=value. There is deliberately no method argument.
+_read() {
+  local path="$1"; shift
+  local args=(-sS -m "$TIMEOUT" --get -X GET -H 'Accept: application/json' -w '\n%{http_code}')
+  local kv
+  for kv in "$@"; do args+=(--data-urlencode "$kv"); done
+  _curl args "$path"
+}
+
+# Just the .result, which is what every caller actually wants.
+_result() {
+  local j; j="$(_read "$@")"
+  printf '%s' "$j" | jq -c '.result'
+}
+
+_require_write() {
+  case "$WRITE" in
+    yes) : ;;
+    no)  die "'${ALIAS}' is registered with a READ-ONLY Cloudflare token, so it cannot
+    make changes. Mint a token with the Edit permissions listed by
+    'hh add-cloudflare' and register it, either replacing this one or as a
+    second alias:
+        hh rm-host ${ALIAS} && hh add-cloudflare" ;;
+    *)   die "'${ALIAS}' does not record whether its token can write (WRITE= is unset).
+    Re-register it so that is settled rather than guessed:
+        hh rm-host ${ALIAS} && hh add-cloudflare" ;;
+  esac
+}
+
+# The method arrives as a literal from one of the four wrappers below and is
+# re-checked here against a literal allowlist.
+_write() {
+  local method="$1" path="$2" body="${3:-}"
+  case "$method" in
+    POST|PUT|PATCH|DELETE) : ;;
+    *) die "internal error: refusing method '${method}'" ;;
+  esac
+  _require_write
+  local args=(-sS -m "$TIMEOUT" -X "$method" -H 'Accept: application/json' -w '\n%{http_code}')
+  if [ -n "$body" ]; then
+    args+=(-H 'Content-Type: application/json' --data-binary "$body")
+  fi
+  _curl args "$path"
+}
+
+_post()   { _write POST   "$@"; }
+_put()    { _write PUT    "$@"; }
+_patch()  { _write PATCH  "$@"; }
+_delete() { _write DELETE "$@"; }
+
+_expect_array() {
+  printf '%s' "$1" | jq -e 'type == "array"' >/dev/null 2>&1 && return 0
+  die "unexpected response from ${2}: $(printf '%s' "$1" | tr -d '\n' | cut -c1-160)"
+}
+
+# The few GET paths that return a credential rather than describe one.
+#
+# This exists because Cloudflare breaks the assumption the rest of HomelabHero
+# rests on. Elsewhere "it can only GET" is the entire safety argument; here a
+# GET can hand back the tunnel token, which is enough to run a connector for
+# your tunnel from anywhere. The named ops never touch these paths; this guards
+# the `get` escape hatch, which is the only way to reach an arbitrary one.
+_deny_secret_path() {
+  case "$1" in
+    */cfd_tunnel/*/token*|*/cfd_tunnel/*/management*)
+      die "that endpoint returns a tunnel CREDENTIAL, not a description of one, so this
+    broker will not fetch it. Anyone holding that token can run a connector for
+    your tunnel. If you genuinely need it, get it from the Cloudflare dashboard
+    or 'cloudflared tunnel token <name>' on a host you trust - not through an
+    agent session, where it would land in a transcript." ;;
+    "${API}/user/tokens"*|*/tokens/*/value*)
+      die "that endpoint deals in API tokens, which this broker will not read or relay." ;;
+  esac
+}
+
+_confirm() {
+  local what="$1"
+  [ "$FORCE" -eq 1 ] && return 0
+  die "this would ${what}
+
+    That is destructive, so it will not run without you saying so explicitly.
+    If that is what you want, run the same command again with --force:
+
+        ${RETRY} --force"
+}
+
+_confirm_self() {
+  local what="$1"
+  [ "$FORCE" -eq 1 ] && return 0
+  die "this would ${what}
+
+    That record points at THIS machine, so changing it may be how you would have
+    reached it afterwards - including, quite possibly, the way you are reading
+    this. Nothing here can put it back for you.
+
+    If you are certain, run the same command again with --force:
+
+        ${RETRY} --force"
+}
+
+# Which addresses belong to this machine, used to notice a DNS record that
+# points at it. Never empty, so a box without `ip` does not silently disable the
+# check by matching everything.
+_LOCAL_IPS=""
+_local_ips() {
+  if [ -z "$_LOCAL_IPS" ]; then
+    _LOCAL_IPS="$(ip -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | sort -u | tr '\n' ' ')"
+    [ -n "$_LOCAL_IPS" ] || _LOCAL_IPS=" "
+  fi
+  printf '%s' "$_LOCAL_IPS"
+}
+_points_at_self() {
+  local c="$1"
+  [ -n "$c" ] || return 1
+  case " $(_local_ips) " in *" ${c} "*) return 0 ;; esac
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# Which account, and which zone
+#
+# Rewrite one key in the registry entry, atomically and without needing write
+# permission on the file itself. The entry is written by `hh add-cloudflare` as
+# root (mode 644) but lives in a directory owned by the vault user, so
+# redirecting onto it fails: truncating a file needs permission on the FILE,
+# while replacing it needs permission on the DIRECTORY, which is what we have.
+# A temp file in the SAME directory plus a rename swaps it in one step, so a
+# concurrent reader never sees a half-written registry.
+#
+# This is a cache, never a source of truth: if it cannot be written the lookup
+# simply happens again next time, so failure here is silent on purpose.
+_remember() {
+  local key="$1" val="$2" tmp
+  tmp="$(mktemp "${REG_DIR}/.${ALIAS}.XXXXXX" 2>/dev/null)" || return 0
+  {
+    grep -v "^${key}=" "$CONF" 2>/dev/null || true
+    printf '%s=%s\n' "$key" "$val"
+  } >"$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
+  chmod 644 "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$CONF" 2>/dev/null || rm -f "$tmp"
+  return 0
+}
+
+# The account this alias means. Tunnels and Access are account-scoped, and a
+# token can see more than one account, so the same rule as Firewalla's box pin
+# applies: resolve silently when there is exactly one, REFUSE when there are
+# several. Picking the first would be a guess, and a guess that returns a
+# plausible tunnel list from the wrong account is the failure this prevents.
+_account() {
+  if [ -z "$ACCOUNT" ]; then
+    local j n
+    j="$(_result "${API}/accounts")"
+    _expect_array "$j" "${API}/accounts"
+    n="$(printf '%s' "$j" | jq -r 'length')"
+    case "$n" in
+      0) die "the token works, but it cannot see any Cloudflare account.
+    Tunnels and Access are account-scoped; add Account permissions to the token." ;;
+      1) ACCOUNT="$(printf '%s' "$j" | jq -r '.[0].id')"
+         ACCOUNT_NAME="$(printf '%s' "$j" | jq -r '.[0].name // "?"')"
+         _remember ACCOUNT "$ACCOUNT"
+         _remember ACCOUNT_NAME "$ACCOUNT_NAME" ;;
+      *) die "'${ALIAS}' is not pinned to an account, and this token can see ${n}.
+    Rather than guess which one you meant, this refuses. Re-register it and pick,
+    from an admin shell:
+        hh rm-host ${ALIAS}
+        hh add-cloudflare
+    Accounts this token can see:
+$(printf '%s' "$j" | jq -r '.[] | "        \(.name // "?")  \(.id)"')" ;;
+    esac
+  fi
+  printf '%s' "$ACCOUNT"
+}
+
+# A zone, by name or id. Asks Cloudflare to do the matching where it can
+# (name= is an exact filter server-side), so a homelab with forty zones does
+# not page through all of them.
+_zone() {
+  local q="$1" j n
+  if [[ "$q" =~ ^[0-9a-f]{32}$ ]]; then
+    j="$(_result "${API}/zones/${q}")"
+    printf '%s' "$j" | jq -e 'type == "object"' >/dev/null 2>&1 || die "no zone with id ${q}"
+    printf '%s' "$j"
+    return 0
+  fi
+  j="$(_result "${API}/zones" "name=${q}")"
+  _expect_array "$j" "${API}/zones"
+  n="$(printf '%s' "$j" | jq -r 'length')"
+  if [ "$n" -eq 0 ]; then
+    # Fall back to a contains match, so "example" finds example.com - but only
+    # after the exact name has had its chance.
+    j="$(_result "${API}/zones" "name=${q}" "match=any")"
+    n="$(printf '%s' "$j" | jq -r 'length' 2>/dev/null || echo 0)"
+  fi
+  case "$n" in
+    0) die "no zone matches '${q}' (list them with: hh cloudflare zones ${ALIAS})" ;;
+    1) printf '%s' "$j" | jq -c '.[0]' ;;
+    *) die "'${q}' matches ${n} zones, and this needs exactly one:
+$(printf '%s' "$j" | jq -r '.[] | "        \(.name)  \(.id)"')" ;;
+  esac
+}
+
+# One DNS record in a zone, by exact name (optionally narrowed by type). Exact
+# only: a write that guessed which record "home" meant would repoint the wrong
+# hostname, and DNS is cached far and wide before anyone notices.
+_record() {
+  local zid="$1" name="$2" type="${3:-}" j n args
+  args=("name.exact=${name}")
+  [ -n "$type" ] && args+=("type=${type}")
+  j="$(_result "${API}/zones/${zid}/dns_records" "${args[@]}")"
+  _expect_array "$j" "dns_records"
+  # Filter again here rather than trusting name.exact to have been applied.
+  # The server-side filter is the fast path, not the correctness argument: if it
+  # is ever ignored or renamed, this op would otherwise see the whole zone and
+  # refuse every write as ambiguous. Re-checking locally means the wrong record
+  # can still never be picked, and the right one is still found.
+  j="$(printf '%s' "$j" | jq -c --arg n "$name" --arg t "$type" '
+    [ .[] | select((.name // "") == $n) | select($t == "" or (.type // "") == $t) ]')"
+  n="$(printf '%s' "$j" | jq -r 'length')"
+  case "$n" in
+    0) printf '' ;;
+    1) printf '%s' "$j" | jq -c '.[0]' ;;
+    *) die "'${name}' has ${n} records in this zone, and this needs exactly one.
+    Name the type as well (A, AAAA, CNAME, TXT, ...):
+$(printf '%s' "$j" | jq -r '.[] | "        \(.type)  \(.name)  -> \(.content)"')" ;;
+  esac
+}
+
+# A tunnel, by name or uuid. Deleted tunnels are excluded: Cloudflare keeps them
+# listed, and matching one would produce a confusing "found it, but it is gone".
+_tunnel() {
+  local q="$1" acct j n
+  acct="$(_account)"
+  j="$(_result "${API}/accounts/${acct}/cfd_tunnel" "is_deleted=false")"
+  _expect_array "$j" "cfd_tunnel"
+  n="$(printf '%s' "$j" | jq -r --arg q "$q" '[.[] | select(.id == $q or .name == $q)] | length')"
+  if [ "$n" -eq 1 ]; then
+    printf '%s' "$j" | jq -c --arg q "$q" '[.[] | select(.id == $q or .name == $q)][0]'
+    return 0
+  fi
+  n="$(printf '%s' "$j" | jq -r --arg q "$q" '[.[] | select((.name // "") | ascii_downcase | contains($q | ascii_downcase))] | length')"
+  case "$n" in
+    0) die "no tunnel matches '${q}' (list them with: hh cloudflare tunnels ${ALIAS})" ;;
+    1) printf '%s' "$j" | jq -c --arg q "$q" '[.[] | select((.name // "") | ascii_downcase | contains($q | ascii_downcase))][0]' ;;
+    *) die "'${q}' matches ${n} tunnels, and this needs exactly one:
+$(printf '%s' "$j" | jq -r '.[] | "        \(.name)  \(.id)"')" ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# Read ops
+
+op_info() { _read "${API}/accounts"; }
+
+op_ping() {
+  local j st
+  j="$(_result "${API}/user/tokens/verify")"
+  st="$(printf '%s' "$j" | jq -r '.status // "unknown"')"
+  [ "$st" = "active" ] || die "the Cloudflare token is not active (status: ${st})"
+  printf 'cloudflare-ok %s (token active, can %s)\n' "$HOST" \
+    "$(if [ "$WRITE" = "yes" ]; then echo write; else echo read; fi)"
+}
+
+op_zones() {
+  local j; j="$(_result "${API}/zones" "per_page=100")"
+  _expect_array "$j" "${API}/zones"
+  printf '%s' "$j" | jq -r '.[] |
+      "\(.name)\t\(.id)\t\(.status // "-")\t\(.plan.name // "-")\t\((.name_servers // []) | join(","))"' \
+    | awk -F'\t' 'BEGIN{printf "%-30s %-34s %-10s %-14s %s\n","ZONE","ID","STATUS","PLAN","NAMESERVERS"}
+                  {printf "%-30s %-34s %-10s %-14s %s\n",$1,$2,$3,$4,$5}'
+}
+
+op_dns() {
+  [ "$#" -ge 1 ] || die "usage: hh cloudflare records [alias] <zone> [name-substring]"
+  local z zid j; z="$(_zone "$1")"; zid="$(printf '%s' "$z" | jq -r '.id')"
+  local args=("per_page=100")
+  [ -n "${2:-}" ] && args+=("name.contains=${2}")
+  j="$(_result "${API}/zones/${zid}/dns_records" "${args[@]}")"
+  _expect_array "$j" "dns_records"
+  if [ "$(printf '%s' "$j" | jq -r 'length')" -eq 0 ]; then
+    echo "No DNS records match."
+    return 0
+  fi
+  printf '%s' "$j" | jq -r '.[] |
+      "\(.type)\t\(.name)\t\(.content)\t\(if .ttl == 1 then "auto" else (.ttl | tostring) end)\t\(if .proxied then "proxied" else "dns-only" end)\t\((.comment // "") | gsub("\\s+"; " "))"' \
+    | sort -t"$(printf '\t')" -k2,2 \
+    | awk -F'\t' 'BEGIN{printf "%-8s %-38s %-40s %-6s %-10s %s\n","TYPE","NAME","CONTENT","TTL","MODE","COMMENT"}
+                  {printf "%-8s %-38s %-40s %-6s %-10s %s\n",$1,$2,$3,$4,$5,$6}'
+}
+
+# Tunnel health is the question this whole integration exists to answer, so it
+# is the first column and it is spelled out rather than left as a status code.
+op_tunnels() {
+  local acct j; acct="$(_account)"
+  j="$(_result "${API}/accounts/${acct}/cfd_tunnel" "is_deleted=false")"
+  _expect_array "$j" "cfd_tunnel"
+  if [ "$(printf '%s' "$j" | jq -r 'length')" -eq 0 ]; then
+    echo "No tunnels on this account."
+    return 0
+  fi
+  printf '%s' "$j" | jq -r '.[] |
+      "\(.name)\t\(.id)\t\((.status // "?") | ascii_upcase)\t\((.connections // []) | length)\t\([(.connections // [])[] | .colo_name] | unique | join(","))\t\((.connections // [] | map(.client_version) | unique | join(",")))\t\(.created_at // "-" | sub("T.*"; ""))"' \
+    | awk -F'\t' 'BEGIN{printf "%-26s %-36s %-10s %6s %-16s %-12s %s\n","TUNNEL","ID","STATUS","CONNS","EDGE","CLOUDFLARED","CREATED"}
+                  {printf "%-26s %-36s %-10s %6s %-16s %-12s %s\n",$1,$2,$3,$4,$5,$6,$7}'
+}
+
+# One tunnel in full: its connections, and - the part people actually want - the
+# ingress table saying which hostname maps to which local service.
+op_tunnel() {
+  [ "$#" -ge 1 ] || die "usage: hh cloudflare tunnel-show [alias] <name-or-id>"
+  local t acct id conns cfg
+  t="$(_tunnel "$1")"; acct="$(_account)"; id="$(printf '%s' "$t" | jq -r '.id')"
+  printf '%s' "$t" | jq -r '"Tunnel    \(.name)  (\(.id))",
+    "Status    \((.status // "?") | ascii_upcase)   \((.connections // []) | length) connection(s)   created \(.created_at // "-" | sub("T.*"; ""))"'
+
+  conns="$(_result "${API}/accounts/${acct}/cfd_tunnel/${id}/connections" 2>/dev/null)" || conns=""
+  if printf '%s' "$conns" | jq -e 'type == "array" and length > 0' >/dev/null 2>&1; then
+    echo
+    echo "# Connectors"
+    printf '%s' "$conns" | jq -r '.[] |
+        "\(.id // "-")\t\(.origin_ip // "-")\t\(.features // [] | join(","))\t\(.version // "-")\t\(.run_at // "-" | sub("T"; " ") | sub("Z$"; ""))"' \
+      | awk -F'\t' 'BEGIN{printf "%-36s %-16s %-24s %-10s %s\n","CONNECTOR","ORIGIN IP","FEATURES","VERSION","RUNNING SINCE"}
+                    {printf "%-36s %-16s %-24s %-10s %s\n",$1,$2,$3,$4,$5}'
+  fi
+
+  # A locally-managed tunnel keeps its ingress in the host's config file, not at
+  # Cloudflare, so this section is legitimately empty for those - say which it
+  # is rather than printing nothing.
+  cfg="$(_result "${API}/accounts/${acct}/cfd_tunnel/${id}/configurations" 2>/dev/null)" || cfg=""
+  echo
+  echo "# Ingress"
+  if printf '%s' "$cfg" | jq -e '(.config.ingress // []) | length > 0' >/dev/null 2>&1; then
+    printf '%s' "$cfg" | jq -r '(.config.ingress // [])[] |
+        "\(.hostname // "(catch-all)")\t\(.path // "-")\t\(.service // "-")"' \
+      | awk -F'\t' 'BEGIN{printf "%-44s %-10s %s\n","HOSTNAME","PATH","SERVICE"}
+                    {printf "%-44s %-10s %s\n",$1,$2,$3}'
+  else
+    printf '%s' "$t" | jq -r 'if (.config_src // "cloudflare") == "local"
+      then "(this tunnel is locally managed: its ingress lives in the cloudflared config file on the host, not at Cloudflare. Read it with: hh run <host> \"cat /etc/cloudflared/config.yml\")"
+      else "(no ingress rules configured)" end'
+  fi
+}
+
+op_access() {
+  local acct j; acct="$(_account)"
+  j="$(_result "${API}/accounts/${acct}/access/apps")"
+  _expect_array "$j" "access/apps"
+  if [ "$(printf '%s' "$j" | jq -r 'length')" -eq 0 ]; then
+    echo "No Access applications on this account."
+    return 0
+  fi
+  printf '%s' "$j" | jq -r '.[] |
+      "\(.name // "?")\t\(.id // "-")\t\(.type // "-")\t\(.domain // "-")\t\(.session_duration // "-")"' \
+    | awk -F'\t' 'BEGIN{printf "%-26s %-36s %-10s %-40s %s\n","APPLICATION","ID","TYPE","DOMAIN","SESSION"}
+                  {printf "%-26s %-36s %-10s %-40s %s\n",$1,$2,$3,$4,$5}'
+}
+
+op_summary() {
+  local acct tun zones
+
+  # Deliberately NOT tolerated: if the token is refused, that is the answer.
+  op_ping >/dev/null
+  acct="$(_account)"
+  printf 'Cloudflare %s   account %s   (token can %s)\n' "$HOST" \
+    "${ACCOUNT_NAME:-$acct}" "$(if [ "$WRITE" = "yes" ]; then echo write; else echo read; fi)"
+
+  tun="$(_result "${API}/accounts/${acct}/cfd_tunnel" "is_deleted=false" 2>/dev/null)" || tun=""
+  if printf '%s' "$tun" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    printf '%s' "$tun" | jq -r '"Tunnels   \(length) total, \([.[] | select(.status == "healthy")] | length) healthy"'
+    # A tunnel that is not healthy is the single most common cause of "the
+    # service works at home but not from outside", so name those rather than
+    # leaving a count for someone to interpret.
+    printf '%s' "$tun" | jq -r '[.[] | select(.status != "healthy") | "\(.name) (\(.status // "?"))"] |
+      if length > 0 then "Down      \(length): \(join(", "))" else empty end'
+  fi
+
+  zones="$(_result "${API}/zones" "per_page=100" 2>/dev/null)" || zones=""
+  if printf '%s' "$zones" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    printf '%s' "$zones" | jq -r '"Zones     \(length): \([.[] | .name] | join(", "))"'
+    printf '%s' "$zones" | jq -r '[.[] | select(.status != "active") | "\(.name) (\(.status))"] |
+      if length > 0 then "Inactive  \(join(", "))" else empty end'
+  fi
+}
+
+# Escape hatch: any GET under /client/v4/, MINUS the paths that hand back a
+# credential. See _deny_secret_path - this is the one broker where "it is only a
+# GET" is not by itself enough.
+op_get() {
+  [ "$#" -ge 1 ] || die "usage: hh cloudflare get [alias] </client/v4/...> [name=value ...]   ({account} is expanded)"
+  local p="$1"; shift
+  case "$p" in *'{account}'*) p="${p//\{account\}/$(_account)}" ;; esac
+  case "$p" in
+    "${API}/"*) : ;;
+    *) die "path must start with ${API}/ (got: ${p})" ;;
+  esac
+  case "$p" in *..*) die "path may not contain '..'" ;; esac
+  _deny_secret_path "$p"
+  _read "$p" "$@"
+}
+
+# ---------------------------------------------------------------------------
+# Write ops
+#
+# Every body is built with jq -n --arg, never by pasting a value into a JSON
+# string: a TXT record's content is arbitrary text, quotes and all, and hand-
+# built JSON turns that into an injection.
+
+# Create the record if it is absent, update it if it is present. This is the
+# shape the job actually has - "point home.example.com at this address" - and
+# splitting it into create and update would just make the caller check first.
+op_dns_set() {
+  [ "$#" -ge 3 ] || die "usage: hh cloudflare dns-set [alias] <zone> <type> <name> <content> [ttl] [on|off]
+    ttl is seconds, or 'auto'. The last argument is Cloudflare proxying.
+    e.g. hh cloudflare dns-set cf example.com A home.example.com 203.0.113.9 auto on"
+  local zq="$1" type; type="$(printf '%s' "$2" | tr '[:lower:]' '[:upper:]')"
+  local name="$3" content="${4:-}" ttlarg="${5:-auto}" prox="${6:-}"
+  [ -n "$content" ] || die "no content given (an A record needs an address, a CNAME a target, ...)"
+  case "$type" in
+    A|AAAA|CNAME|TXT|MX|NS|SRV|CAA) : ;;
+    *) die "unsupported record type '${type}'. This op handles A, AAAA, CNAME, TXT, MX, NS, SRV and CAA;
+    anything more exotic is better made in the dashboard where its fields are labelled." ;;
+  esac
+  local ttl
+  if [ "$ttlarg" = "auto" ]; then ttl=1
+  else
+    [[ "$ttlarg" =~ ^[0-9]+$ ]] || die "ttl must be a number of seconds or 'auto', got: ${ttlarg}"
+    ttl="$ttlarg"
+  fi
+  # Proxying only means anything for the record types that carry traffic.
+  local proxied="false"
+  if [ -n "$prox" ]; then
+    case "$type" in
+      A|AAAA|CNAME) : ;;
+      *) die "a ${type} record cannot be proxied; leave the last argument off" ;;
+    esac
+    case "$prox" in
+      on|true|yes)  proxied="true" ;;
+      off|false|no) proxied="false" ;;
+      *) die "expected 'on' or 'off' for proxying, got: ${prox}" ;;
+    esac
+  fi
+
+  local z zid zname existing body
+  z="$(_zone "$zq")"; zid="$(printf '%s' "$z" | jq -r '.id')"; zname="$(printf '%s' "$z" | jq -r '.name')"
+  # Accept a bare label as well as a fully qualified name, because "home" is
+  # what a person says when they mean home.example.com.
+  case "$name" in
+    "$zname"|*".${zname}") : ;;
+    @) name="$zname" ;;
+    *) name="${name}.${zname}" ;;
+  esac
+  existing="$(_record "$zid" "$name" "$type")"
+
+  if [ -z "$existing" ]; then
+    body="$(jq -nc --arg t "$type" --arg n "$name" --arg c "$content" \
+      --argjson ttl "$ttl" --argjson p "$proxied" \
+      '{type: $t, name: $n, content: $c, ttl: $ttl} + (if $t == "A" or $t == "AAAA" or $t == "CNAME" then {proxied: $p} else {} end)')"
+    _post "${API}/zones/${zid}/dns_records" "$body" >/dev/null
+    printf 'Created %s %s -> %s (ttl %s%s)\n' "$type" "$name" "$content" \
+      "$(if [ "$ttl" = "1" ]; then echo auto; else echo "$ttl"; fi)" \
+      "$(if [ "$proxied" = "true" ]; then echo ", proxied"; fi)"
+    return 0
+  fi
+
+  local rid old
+  rid="$(printf '%s' "$existing" | jq -r '.id')"
+  old="$(printf '%s' "$existing" | jq -r '.content')"
+  if [ "$old" = "$content" ] \
+     && [ "$(printf '%s' "$existing" | jq -r '.ttl')" = "$ttl" ] \
+     && { [ -z "$prox" ] || [ "$(printf '%s' "$existing" | jq -r '.proxied')" = "$proxied" ]; }; then
+    printf '%s %s already points at %s; nothing to do.\n' "$type" "$name" "$content"
+    return 0
+  fi
+  # Repointing a record that currently resolves to this machine is the one DNS
+  # change that can cut the path you are using to make it.
+  if _points_at_self "$old"; then
+    _confirm_self "repoint ${type} ${name} away from ${old} (this machine) to ${content}"
+  fi
+  body="$(jq -nc --arg c "$content" --argjson ttl "$ttl" --argjson p "$proxied" --arg prox "$prox" \
+    '{content: $c, ttl: $ttl} + (if $prox == "" then {} else {proxied: $p} end)')"
+  _patch "${API}/zones/${zid}/dns_records/${rid}" "$body" >/dev/null
+  printf 'Updated %s %s: %s -> %s\n' "$type" "$name" "$old" "$content"
+}
+
+op_dns_proxy() {
+  [ "$#" -ge 3 ] || die "usage: hh cloudflare dns-proxy [alias] <zone> <name> <on|off>"
+  local z zid zname name="$2" want
+  z="$(_zone "$1")"; zid="$(printf '%s' "$z" | jq -r '.id')"; zname="$(printf '%s' "$z" | jq -r '.name')"
+  case "$name" in "$zname"|*".${zname}") : ;; @) name="$zname" ;; *) name="${name}.${zname}" ;; esac
+  case "$3" in
+    on|true|yes)  want="true" ;;
+    off|false|no) want="false" ;;
+    *) die "expected 'on' or 'off', got: $3" ;;
+  esac
+  local rec rid; rec="$(_record "$zid" "$name")"
+  [ -n "$rec" ] || die "no record named ${name} in ${zname}"
+  rid="$(printf '%s' "$rec" | jq -r '.id')"
+  if [ "$(printf '%s' "$rec" | jq -r '.proxied')" = "$want" ]; then
+    printf '%s is already %s; nothing to do.\n' "$name" "$(if [ "$want" = true ]; then echo proxied; else echo dns-only; fi)"
+    return 0
+  fi
+  # Turning the proxy OFF publishes the origin address in DNS for anyone to
+  # read, which is usually the opposite of what a homelab wants.
+  if [ "$want" = "false" ]; then
+    _confirm "stop proxying ${name}, which exposes its origin address (\
+$(printf '%s' "$rec" | jq -r '.content')) directly in public DNS"
+  fi
+  _patch "${API}/zones/${zid}/dns_records/${rid}" "$(jq -nc --argjson p "$want" '{proxied: $p}')" >/dev/null
+  printf '%s is now %s\n' "$name" "$(if [ "$want" = true ]; then echo proxied; else echo dns-only; fi)"
+}
+
+op_dns_delete() {
+  [ "$#" -ge 2 ] || die "usage: hh cloudflare dns-delete [alias] <zone> <name> [type]"
+  local z zid zname name="$2" type="${3:-}"
+  z="$(_zone "$1")"; zid="$(printf '%s' "$z" | jq -r '.id')"; zname="$(printf '%s' "$z" | jq -r '.name')"
+  case "$name" in "$zname"|*".${zname}") : ;; @) name="$zname" ;; *) name="${name}.${zname}" ;; esac
+  local rec rid content rtype
+  rec="$(_record "$zid" "$name" "$type")"
+  [ -n "$rec" ] || die "no record named ${name} in ${zname}"
+  rid="$(printf '%s' "$rec" | jq -r '.id')"
+  content="$(printf '%s' "$rec" | jq -r '.content')"
+  rtype="$(printf '%s' "$rec" | jq -r '.type')"
+  if _points_at_self "$content"; then
+    _confirm_self "delete ${rtype} ${name}, which currently resolves to ${content} (this machine)"
+  else
+    _confirm "delete ${rtype} ${name} -> ${content} from ${zname}. Resolvers that have it cached keep answering with it until the old TTL runs out, so this does not take effect everywhere at once"
+  fi
+  _delete "${API}/zones/${zid}/dns_records/${rid}" >/dev/null
+  printf 'Deleted %s %s -> %s\n' "$rtype" "$name" "$content"
+}
+
+# Publishing a service through an existing tunnel. This is the homelab job:
+# "make jellyfin.example.com reach the box on port 8096".
+#
+# The ingress list is ORDERED and its last entry is the catch-all that every
+# tunnel must end with. A new rule therefore goes in BEFORE that entry, never
+# appended - appending puts it after the catch-all, where it is unreachable and
+# silently does nothing.
+op_tunnel_route() {
+  [ "$#" -ge 3 ] || die "usage: hh cloudflare tunnel-route [alias] <tunnel> <hostname> <service>
+    e.g. hh cloudflare tunnel-route cf home-tunnel jellyfin.example.com http://192.168.1.50:8096"
+  local t acct id name hostname="$2" service="$3" cfg ingress body
+  t="$(_tunnel "$1")"; acct="$(_account)"
+  id="$(printf '%s' "$t" | jq -r '.id')"; name="$(printf '%s' "$t" | jq -r '.name')"
+  if [ "$(printf '%s' "$t" | jq -r '.config_src // "cloudflare"')" = "local" ]; then
+    die "tunnel '${name}' is LOCALLY managed: its ingress lives in the cloudflared config
+    file on the host that runs it, and Cloudflare does not hold a copy to edit.
+    Changing it here would be ignored. Edit the file on that host instead, then
+    restart cloudflared."
+  fi
+  case "$service" in
+    http://*|https://*|tcp://*|ssh://*|rdp://*|unix:*|http_status:*) : ;;
+    *) die "service must be a cloudflared service URL, e.g. http://192.168.1.50:8096,
+    tcp://10.0.0.5:22, or http_status:404 (got: ${service})" ;;
+  esac
+
+  cfg="$(_result "${API}/accounts/${acct}/cfd_tunnel/${id}/configurations")"
+  ingress="$(printf '%s' "$cfg" | jq -c '.config.ingress // []')"
+  if printf '%s' "$ingress" | jq -e --arg h "$hostname" 'any(.[]; .hostname == $h)' >/dev/null; then
+    # Changing where an existing hostname points is an update, not a create, and
+    # the person asking probably means it - but they should see the old value.
+    local old; old="$(printf '%s' "$ingress" | jq -r --arg h "$hostname" '[.[] | select(.hostname == $h)][0].service')"
+    ingress="$(printf '%s' "$ingress" | jq -c --arg h "$hostname" --arg s "$service" \
+      'map(if .hostname == $h then .service = $s else . end)')"
+    body="$(printf '%s' "$cfg" | jq -c --argjson ing "$ingress" '{config: (.config + {ingress: $ing})}')"
+    _put "${API}/accounts/${acct}/cfd_tunnel/${id}/configurations" "$body" >/dev/null
+    printf 'Repointed %s: %s -> %s (tunnel %s)\n' "$hostname" "$old" "$service" "$name"
+    return 0
+  fi
+  # Insert before the catch-all (the trailing entry with no hostname). If the
+  # config has no catch-all at all, add one, because cloudflared rejects an
+  # ingress list that does not end in one.
+  ingress="$(printf '%s' "$ingress" | jq -c --arg h "$hostname" --arg s "$service" '
+    (map(select(.hostname != null))) as $named
+    | (map(select(.hostname == null))) as $catch
+    | $named + [{hostname: $h, service: $s}]
+      + (if ($catch | length) > 0 then $catch else [{service: "http_status:404"}] end)')"
+  body="$(printf '%s' "$cfg" | jq -c --argjson ing "$ingress" '{config: (.config + {ingress: $ing})}')"
+  _put "${API}/accounts/${acct}/cfd_tunnel/${id}/configurations" "$body" >/dev/null
+  printf 'Routed %s -> %s through tunnel %s\n' "$hostname" "$service" "$name"
+  printf 'DNS is separate: the hostname also needs a CNAME to %s.cfargotunnel.com\n' "$id"
+  printf '  hh cloudflare dns-set %s <zone> CNAME %s %s.cfargotunnel.com auto on\n' "$ALIAS" "$hostname" "$id"
+}
+
+op_tunnel_unroute() {
+  [ "$#" -ge 2 ] || die "usage: hh cloudflare tunnel-unroute [alias] <tunnel> <hostname>"
+  local t acct id name hostname="$2" cfg ingress old body
+  t="$(_tunnel "$1")"; acct="$(_account)"
+  id="$(printf '%s' "$t" | jq -r '.id')"; name="$(printf '%s' "$t" | jq -r '.name')"
+  cfg="$(_result "${API}/accounts/${acct}/cfd_tunnel/${id}/configurations")"
+  ingress="$(printf '%s' "$cfg" | jq -c '.config.ingress // []')"
+  printf '%s' "$ingress" | jq -e --arg h "$hostname" 'any(.[]; .hostname == $h)' >/dev/null \
+    || die "tunnel ${name} has no ingress rule for ${hostname}"
+  old="$(printf '%s' "$ingress" | jq -r --arg h "$hostname" '[.[] | select(.hostname == $h)][0].service')"
+  _confirm "stop tunnel ${name} serving ${hostname} (currently ${old}), making it unreachable from outside. The DNS record for it stays behind and will start returning errors until you remove it too"
+  ingress="$(printf '%s' "$ingress" | jq -c --arg h "$hostname" 'map(select(.hostname != $h))')"
+  body="$(printf '%s' "$cfg" | jq -c --argjson ing "$ingress" '{config: (.config + {ingress: $ing})}')"
+  _put "${API}/accounts/${acct}/cfd_tunnel/${id}/configurations" "$body" >/dev/null
+  printf 'Removed %s from tunnel %s (was %s)\n' "$hostname" "$name" "$old"
+}
+
+# Purge the whole cache for a zone. Not gated: it removes nothing you configured
+# and the cache refills itself. It does send every request to your origin for a
+# while, which is worth knowing but is not worth a confirmation step.
+op_purge() {
+  [ "$#" -ge 1 ] || die "usage: hh cloudflare purge [alias] <zone>"
+  local z zid zname; z="$(_zone "$1")"
+  zid="$(printf '%s' "$z" | jq -r '.id')"; zname="$(printf '%s' "$z" | jq -r '.name')"
+  _post "${API}/zones/${zid}/purge_cache" '{"purge_everything":true}' >/dev/null
+  printf 'Purged the whole cache for %s. Expect a burst of origin traffic while it refills.\n' "$zname"
+}
+
+# Log everyone out of an Access application. A real security action - it is what
+# you run when a laptop goes missing - and disruptive enough to confirm.
+op_access_revoke() {
+  [ "$#" -ge 1 ] || die "usage: hh cloudflare access-revoke [alias] <app>"
+  local acct j app id name
+  acct="$(_account)"
+  j="$(_result "${API}/accounts/${acct}/access/apps")"
+  _expect_array "$j" "access/apps"
+  app="$(printf '%s' "$j" | jq -c --arg q "$1" '
+    ([.[] | select(.id == $q or .name == $q)]) as $exact
+    | ([.[] | select(((.name // "") | ascii_downcase) | contains($q | ascii_downcase))]) as $fuzzy
+    | if ($exact | length) > 0 then $exact else $fuzzy end')"
+  case "$(printf '%s' "$app" | jq -r 'length')" in
+    0) die "no Access application matches '$1' (list them with: hh cloudflare access ${ALIAS})" ;;
+    1) : ;;
+    *) die "'$1' matches several Access applications; name one exactly:
+$(printf '%s' "$app" | jq -r '.[] | "        \(.name)  \(.id)"')" ;;
+  esac
+  id="$(printf '%s' "$app" | jq -r '.[0].id')"; name="$(printf '%s' "$app" | jq -r '.[0].name')"
+  _confirm "revoke every active session for Access application ${name}. Everyone using it right now is signed out and has to authenticate again"
+  _post "${API}/accounts/${acct}/access/apps/${id}/revoke_tokens" '{}' >/dev/null
+  printf 'Revoked all sessions for Access application %s\n' "$name"
+}
+
+audit "$OP $*"
+
+# Settle write capability before the op runs rather than when it reaches
+# _write, so a read-only alias spends no requests discovering it was never
+# allowed to make the change. _write re-checks regardless.
+case "$OP" in
+  dns-set|dns-proxy|dns-delete|tunnel-route|tunnel-unroute|purge|access-revoke)
+    _require_write ;;
+esac
+
+case "$OP" in
+  # Reads.
+  ping)           op_ping ;;
+  info)           op_info ;;
+  summary)        op_summary ;;
+  zones)          op_zones ;;
+  # These three are named so that no read op is a PREFIX of a write op. Claude's
+  # permission rules match on a command prefix, so allow-listing "hh cloudflare
+  # dns" would also have matched dns-set, dns-proxy and dns-delete - granting
+  # three writes with what reads like a permission to look at records. Same for
+  # "tunnel" (tunnel-route, tunnel-unroute) and "access" (access-revoke). The
+  # older names still work for a person typing them; they are simply not
+  # allow-listed, so they prompt.
+  records|dns)    op_dns "$@" ;;
+  tunnels)        op_tunnels ;;
+  tunnel-show|tunnel) op_tunnel "$@" ;;
+  access-apps|access) op_access ;;
+  get)            op_get "$@" ;;
+  # Writes. Each is a named op with a hardcoded method and path.
+  dns-set)        op_dns_set "$@" ;;
+  dns-proxy)      op_dns_proxy "$@" ;;
+  dns-delete)     op_dns_delete "$@" ;;
+  tunnel-route)   op_tunnel_route "$@" ;;
+  tunnel-unroute) op_tunnel_unroute "$@" ;;
+  purge)          op_purge "$@" ;;
+  access-revoke)  op_access_revoke "$@" ;;
+  post|put|patch|delete|raw)
+    die "there is no generic write op here, by design.
+    Reads have an escape hatch ('hh cloudflare get <path>'); writes do not.
+    Every write is a named op with a path this broker hardcodes, so an endpoint
+    nobody wrote an op for cannot be written to. If you need one that does not
+    exist yet, it should be added here and reviewed, not composed at the call
+    site." ;;
+  *) die "unknown op: ${OP}
+    read:  ping info summary zones records tunnels tunnel-show access-apps get
+    write: dns-set dns-proxy dns-delete tunnel-route tunnel-unroute purge
+           access-revoke" ;;
+esac
