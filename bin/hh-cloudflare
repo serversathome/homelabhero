@@ -85,7 +85,20 @@ for a in "$@"; do
   esac
 done
 set -- ${ARGS[@]+"${ARGS[@]}"}
-RETRY="hh cloudflare ${OP} ${ALIAS}${ARGS[0]+ ${ARGS[*]}}"
+# The command as typed, minus the flag, so a refusal can print the exact line to
+# run again rather than describing it. Each argument is requoted: ${ARGS[*]}
+# joins on spaces, so a value that CONTAINS one - "my new name" - would be
+# printed as three arguments and the retry would not reproduce the command it
+# was offered for. A confirmation step that prints a command which does
+# something else is worse than none.
+RETRY="hh cloudflare ${OP} ${ALIAS}"
+for _a in ${ARGS[@]+"${ARGS[@]}"}; do
+  case "$_a" in
+    *[!A-Za-z0-9._/:@-]*) RETRY="${RETRY} '${_a//\'/\'\\\'\'}'" ;;
+    *)                    RETRY="${RETRY} ${_a}" ;;
+  esac
+done
+unset _a
 
 # Parse the registry entry safely (no sourcing). Only known keys are accepted.
 HOST=""; PORT="443"; AUTH=""; CRED=""; PLATFORM=""; ACCOUNT=""; ACCOUNT_NAME=""; WRITE=""
@@ -424,10 +437,18 @@ _zone() {
   _expect_array "$j" "${API}/zones"
   n="$(printf '%s' "$j" | jq -r 'length')"
   if [ "$n" -eq 0 ]; then
-    # Fall back to a contains match, so "example" finds example.com - but only
+    # Fall back to a substring match, so "example" finds example.com - but only
     # after the exact name has had its chance.
-    j="$(_result "${API}/zones" "name=${q}" "match=any")"
-    n="$(printf '%s' "$j" | jq -r 'length' 2>/dev/null || echo 0)"
+    #
+    # Filtered HERE, not by the API. Cloudflare's zone list has no "contains"
+    # parameter: `name` is exact, and `match` only says whether multiple filters
+    # are ANDed or ORed. Asking again with match=any therefore re-ran the same
+    # exact query and could only return the same nothing, which made this look
+    # like a fallback while being one in name only.
+    j="$(_result "${API}/zones" "per_page=100")"
+    _expect_array "$j" "${API}/zones"
+    j="$(printf '%s' "$j" | jq -c --arg q "$q" '[ .[] | select((.name // "") | ascii_downcase | contains($q | ascii_downcase)) ]')"
+    n="$(printf '%s' "$j" | jq -r 'length')"
   fi
   case "$n" in
     0) die "no zone matches '${q}' (list them with: hh cloudflare zones ${ALIAS})" ;;
@@ -672,7 +693,8 @@ op_get() {
 # splitting it into create and update would just make the caller check first.
 op_dns_set() {
   [ "$#" -ge 3 ] || die "usage: hh cloudflare dns-set [alias] <zone> <type> <name> <content> [ttl] [on|off]
-    ttl is seconds, or 'auto'. The last argument is Cloudflare proxying.
+    ttl is seconds, or 'auto'. The last argument is Cloudflare proxying, and it
+    is REQUIRED for A, AAAA and CNAME - there is no safe default (see below).
     e.g. hh cloudflare dns-set cf example.com A home.example.com 203.0.113.9 auto on"
   local zq="$1" type; type="$(printf '%s' "$2" | tr '[:lower:]' '[:upper:]')"
   local name="$3" content="${4:-}" ttlarg="${5:-auto}" prox="${6:-}"
@@ -688,9 +710,49 @@ op_dns_set() {
     [[ "$ttlarg" =~ ^[0-9]+$ ]] || die "ttl must be a number of seconds or 'auto', got: ${ttlarg}"
     ttl="$ttlarg"
   fi
-  # Proxying only means anything for the record types that carry traffic.
+  # Proxying only means anything for the record types that carry traffic - and
+  # for those, it is REQUIRED rather than defaulted.
+  #
+  # Not for safety. Both settings are things a homelab does deliberately, and
+  # which one is right depends entirely on what the record is for:
+  #
+  #   * a CNAME to <tunnel-id>.cfargotunnel.com MUST be proxied. Those do not
+  #     work any other way.
+  #   * a record pointing at a reverse proxy you run yourself - nginx proxy
+  #     manager, Caddy, Traefik - is usually meant to be grey-clouded, so that
+  #     your proxy terminates the connection rather than Cloudflare.
+  #
+  # Both are correct. So whichever way a default went, it would be silently
+  # wrong for the other half of the records on the same zone, and the tunnel
+  # half fails nastily: the hostname resolves, serves nothing, and reads as a
+  # broken tunnel rather than a wrong record. There is no default because there
+  # is no answer that holds for both.
+  #
+  # (A secondary point, not the reason: an unproxied record publishes the origin
+  # address, which `dns-proxy off` asks for --force before doing. That matters
+  # less here, because grey-clouding is usually the intent rather than a slip.)
   local proxied="false"
-  if [ -n "$prox" ]; then
+  if [ -z "$prox" ]; then
+    case "$type" in
+      A|AAAA|CNAME) die "say whether ${type} ${name} should be proxied - add 'on' or 'off' as the
+    last argument. Both are ordinary answers and only you know which this is:
+
+      on   Cloudflare terminates the connection and the origin stays hidden.
+           REQUIRED for a CNAME to <tunnel-id>.cfargotunnel.com - a tunnel
+           hostname does not work any other way.
+      off  grey cloud: the record answers with ${content} directly and the
+           connection reaches it. What you want when your own reverse proxy
+           (nginx proxy manager, Caddy, Traefik) is doing the terminating, or
+           for a private address.
+
+    There is no default because there is no answer that is right for both, and
+    guessing wrong on a tunnel record produces a hostname that resolves and
+    serves nothing.
+
+    e.g. ${RETRY} on
+         ${RETRY} off" ;;
+    esac
+  else
     case "$type" in
       A|AAAA|CNAME) : ;;
       *) die "a ${type} record cannot be proxied; leave the last argument off" ;;
@@ -896,7 +958,10 @@ $(printf '%s' "$app" | jq -r '.[] | "        \(.name)  \(.id)"')" ;;
   printf 'Revoked all sessions for Access application %s\n' "$name"
 }
 
-audit "$OP $*"
+# Record the flag as well as the op. Without it the log reads identically for a
+# destructive command that was REFUSED and one that was carried out, and telling
+# those apart afterwards is most of what this log is for.
+audit "$OP $*$([ "$FORCE" -eq 1 ] && printf ' --force')"
 
 # Settle write capability before the op runs rather than when it reaches
 # _write, so a read-only alias spends no requests discovering it was never

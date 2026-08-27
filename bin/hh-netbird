@@ -102,7 +102,20 @@ done
 set -- ${ARGS[@]+"${ARGS[@]}"}
 # The command as typed, minus the flag, so a refusal can print the exact line to
 # run again rather than describing it.
-RETRY="hh netbird ${OP} ${ALIAS}${ARGS[0]+ ${ARGS[*]}}"
+# The command as typed, minus the flag, so a refusal can print the exact line to
+# run again rather than describing it. Each argument is requoted: ${ARGS[*]}
+# joins on spaces, so a value that CONTAINS one - "my new name" - would be
+# printed as three arguments and the retry would not reproduce the command it
+# was offered for. A confirmation step that prints a command which does
+# something else is worse than none.
+RETRY="hh netbird ${OP} ${ALIAS}"
+for _a in ${ARGS[@]+"${ARGS[@]}"}; do
+  case "$_a" in
+    *[!A-Za-z0-9._/:@-]*) RETRY="${RETRY} '${_a//\'/\'\\\'\'}'" ;;
+    *)                    RETRY="${RETRY} ${_a}" ;;
+  esac
+done
+unset _a
 
 # Parse the registry entry safely (no sourcing). Only known keys are accepted.
 # Split on the FIRST '=' by hand rather than with IFS='=', because a value is
@@ -1140,7 +1153,10 @@ op_key_create() {
   printf 'The key itself was printed to your terminal only, and is not in this output.\n'
 }
 
-audit "$OP $*"
+# Record the flag as well as the op. Without it the log reads identically for a
+# destructive command that was REFUSED and one that was carried out, and telling
+# those apart afterwards is most of what this log is for.
+audit "$OP $*$([ "$FORCE" -eq 1 ] && printf ' --force')"
 
 # Settle write capability before the op runs, not when it reaches _write.
 # Without this a read-only alias spends a request resolving a peer name before
