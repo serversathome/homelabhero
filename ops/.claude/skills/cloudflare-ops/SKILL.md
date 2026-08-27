@@ -30,6 +30,22 @@ that the service is unreachable from outside. `hh cloudflare tunnels` asks
 Cloudflare's edge, which knows whether it still has connections, and answers
 either way.
 
+## Know the model before you change anything
+
+`capabilities/cloudflare.md` opens with what these objects are and how they
+relate. The three that get conflated:
+
+**A tunnel, a DNS record, and an Access application are independent.** A
+hostname is published only when BOTH an ingress rule and a CNAME to
+`<tunnel-id>.cfargotunnel.com` exist; either alone looks like a fault and is
+not. Access sits in front of a hostname regardless of how it is served, so
+"behind a tunnel" and "behind Access" are different claims - do not report one
+as the other.
+
+And the one that cannot be undone: turning a proxied record dns-only publishes
+the origin address to anyone watching. Making it proxied again does not unsee
+it.
+
 ## Start here
 
     hh cloudflare summary       # tunnels total/healthy, any that are down,
@@ -42,6 +58,7 @@ home but not from outside", so `summary` names those rather than counting them.
 
 ## Reading further
 
+    hh cloudflare account                      # which account this alias means
     hh cloudflare zones                        # domains this token can see
     hh cloudflare records <zone> [substring]   # DNS records
     hh cloudflare tunnel-show <tunnel>         # connectors AND the ingress
@@ -59,6 +76,24 @@ the host instead of at Cloudflare. `tunnel-show` says so when that is the case,
 and the file is what to read:
 
     hh run <host> "cat /etc/cloudflared/config.yml"
+
+## If an account-scoped op says it cannot find an account
+
+`tunnels`, `tunnel-show` and `access-apps` are account-scoped and need to know
+which account to address. Cloudflare's `GET /accounts` only lists accounts when
+the token carries **Account Settings: Read**, and without it the endpoint
+answers with an empty list rather than an error - which reads like "you have no
+accounts" and is never true of a working token.
+
+HomelabHero works around it by reading the account off one of the zones, so a
+token with Zone: Read resolves fine either way. `hh cloudflare account` says
+which account it settled on and where it came from - run that first when an
+account-scoped op misbehaves.
+
+If it genuinely cannot resolve one (a tunnel-only token that can see no zones),
+the fix is either adding Account Settings: Read to the token, or writing
+`ACCOUNT=<id>` into the alias's registry entry. The error says both. Zone-scoped
+ops (`zones`, `records`) never need it.
 
 ## Changing things
 
@@ -110,6 +145,11 @@ behind it returning 502 all day.
 
 Pair with `netbird-ops` for the overlay, `network-diag` for DNS resolution and
 the hosts themselves, and `docker-stack-ops` for the service behind the tunnel.
+
+**Cloudflare may not be the only way in.** If the account also runs NetBird BYOP
+(its own reverse proxy), some services are published through that instead. A
+service missing from `tunnel-show` is not necessarily unpublished - check
+`hh netbird services` before saying so.
 
 Useful order when something is unreachable from outside:
 

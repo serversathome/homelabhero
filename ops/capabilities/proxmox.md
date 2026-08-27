@@ -4,6 +4,19 @@ Everything below runs through `hh run <pve-alias> "..."`. This is the full
 surface of what a Proxmox node can do and how to inspect or drive each part.
 Lead with the read side; the write side is marked and needs confirmation.
 
+## The model - two traps worth knowing
+
+- **VMs and containers share ONE id space, cluster-wide.** Id 100 is either a
+  QEMU VM or an LXC container, never both, and never on two nodes. So `qm` and
+  `pct` are not interchangeable views of the same thing: running `qm stop 100`
+  when 100 is a container fails in a way that reads like the guest is missing.
+  `pvesh get /cluster/resources` is the one call that lists both with their
+  type, and is the right way to find out which you are holding.
+- **Most commands are NODE-scoped, not cluster-scoped.** `qm list` and `pct
+  list` report the node you are shelled into. In a cluster, a guest you cannot
+  find is usually running on a different node, not gone. `pvesh get
+  /cluster/resources` again, or `pvecm nodes` to see what else exists.
+
 ## Nodes and cluster
 
 - Version / node status: `pveversion -v`, `pvesh get /nodes/<node>/status`
@@ -82,6 +95,23 @@ Lead with the read side; the write side is marked and needs confirmation.
 
 - Core services: `journalctl -u pvedaemon -u pveproxy -u pve-cluster -n 100 --no-pager`
 - Storage/kernel: `dmesg -T | tail -50`, `journalctl -k -n 80 --no-pager`
+
+## What Proxmox cannot tell you
+
+The hypervisor sees guests from the outside. It does NOT know:
+
+- what is happening INSIDE a VM - whether the app is up, what its logs say -
+  unless the guest agent is installed, and then only what `qm guest exec`
+  reaches. For a guest that is itself a registered host, `hh run` on that host
+  is the better tool.
+- the health of the hardware under a storage pool that Proxmox did not create
+  (a NAS exporting NFS, a SAN). `pvesm status` reports the store as Proxmox
+  sees it, which is not the same as the array being healthy.
+- anything about the network fabric, the mesh, or ingress. A guest that is up
+  and unreachable is usually not a Proxmox problem - see network-diag.
+
+Say which of these you actually established. "The VM is running" and "the
+service is up" are different claims and only one of them is visible here.
 
 ## Performance
 

@@ -75,6 +75,27 @@ the internet is down `hh firewalla` is down with it. A failure there is not
 evidence that the router is broken - say which of the two you have actually
 established. The same caveat applies to NetBird Cloud and to Cloudflare.
 
+## How strongly each thing is fenced - do not assume it is uniform
+
+Three different strengths are in play, and treating them as one is how you end
+up believing a command will stop you when it will not:
+
+1. **Cannot write at all** - UniFi, Firewalla. The broker has no code path that
+   issues anything but a GET. Nothing can talk it into one.
+2. **Can write, but structurally fenced** - NetBird, Cloudflare. Named ops only,
+   and anything destructive REFUSES without `--force`. The refusal is real and
+   happens in the broker, not in your judgement.
+3. **Can do anything, fenced only by convention and by the permission prompt** -
+   `hh run` on a shell host (Proxmox, TrueNAS, Linux). `hh run <alias> "qm
+   destroy 100"` is a normal command. Nothing in the broker inspects it, and the
+   "(confirm)" marks in the capability catalogs are instructions to YOU, not
+   enforcement. The only mechanical gate is that `hh run` is not pre-approved,
+   so the user sees and approves the command string.
+
+So the care you take has to be highest exactly where the machinery helps least.
+On a shell host, say what you are about to run and why before running anything
+that changes state, and never assume a refusal will arrive to save you.
+
 ## NetBird and Cloudflare can be changed - the rules
 
 Whether a given alias may write at all depends on the credential it was

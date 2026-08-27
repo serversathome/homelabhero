@@ -4,6 +4,46 @@ For a NetBird mesh (Cloud or self-hosted) registered with a service-user token.
 Everything runs through `hh netbird <op> [alias]`. `hh run` does NOT apply here:
 the mesh is reached over the management API, not SSH.
 
+## The model - what these objects are
+
+Read this before acting on anything below. Most wrong answers about NetBird come
+from assuming it works like a firewall, where rules name hosts. It does not.
+
+- **Peer** - one device running the NetBird agent. Has a stable mesh IP, an OS,
+  an agent version, and belongs to zero or more groups.
+- **Group** - a bag of peers. It is a label, not a network segment.
+- **Policy** - a rule: source group(s) -> destination group(s), a protocol and
+  ports, accept or drop.
+
+  **Policies are written against GROUPS, never against individual peers.** This
+  is the fact everything else follows from. To give a host access to something,
+  you do not edit a rule to mention it - you put it in a group a policy already
+  names (`group-add`). To take access away, you remove it from that group
+  (`group-rm`). Reaching for a policy edit when a group move is the answer is
+  the most common way to get this wrong.
+
+- **Setup key** - an enrolment credential, optionally auto-assigning groups to
+  whatever joins with it. **Revoking a key does not remove the peers already
+  enrolled with it**; it only stops it being used again. "Revoke the key" is
+  often said when "remove the peer" is meant - `rm-peer` is that.
+- **Approval** - where the account requires it, a newly enrolled peer sits out
+  of the mesh until approved. It is registered, visible, and cannot reach
+  anything. `approve` releases it.
+- **Network / router / resource** - how things that are NOT peers get reached. A
+  routing peer (router) advertises a route into a subnet on its side; resources
+  name what is exposed there. A network with no connected router reaches
+  nothing, however correct its policies are.
+- **Posture check** - a device condition (agent version, OS) attached to a
+  policy's source, so a rule can require a peer be up to date as well as in the
+  right group.
+- **Login expiration** - periodic re-authentication for a peer. Normal for
+  laptops, usually turned off for servers, because an expired server peer drops
+  off the mesh until a human signs it back in.
+
+Two things follow that are worth stating outright: a peer being `connected` says
+nothing about whether policy lets it reach anything, and a policy being
+`enabled` says nothing about whether any peer is in the groups it names.
+
 ## Read and write, and which you have
 
 Unlike the UniFi and Firewalla catalogs, this one has write capabilities. They
@@ -54,6 +94,29 @@ that order, and an ambiguous substring is refused rather than guessed.
 
 Networks replaced the older Routes resource, which NetBird now marks deprecated.
 
+## Bring Your Own Proxy (BYOP)
+
+Present only if the account runs its own reverse proxies. All read-only:
+creating and editing a service is dashboard work.
+
+- Proxy clusters and live proxy counts: `hh netbird proxies`
+- Published services: `hh netbird services`
+- One service in full: `hh netbird service <name>`
+- Apex domains and validation: `hh netbird domains`
+
+`services` reports EXPOSURE as **public** (on the internet, gated by AUTH) or
+**mesh-only** (reachable only over NetBird, gated by group membership). A
+mesh-only service has a domain and a certificate and is still not published
+externally.
+
+A cluster with 0 connected proxies is registered but not running - that is a
+container on a host, reachable via `hh run <host> "curl -s
+http://localhost:8080/healthz"`.
+
+**Not readable here:** the `proxy-tokens` endpoints. `hh netbird get` refuses
+them. A proxy token's plaintext is shown once at creation and registers a proxy
+against the whole account, so it is dashboard-only.
+
 ## DNS, keys, history
 
 - Nameserver groups and settings: `hh netbird dns`
@@ -85,6 +148,14 @@ confirmation prompt and put it to the user rather than re-running it yourself.
 - Revoke a setup key: `hh netbird key-revoke <key>` **--force**
 - Create a setup key: `hh netbird key-create <name> [reusable|one-off] [days]
   [group ...]` - **terminal only**, never in an agent session
+
+## What NetBird cannot tell you
+
+It knows the overlay and, where BYOP is in use, what that publishes. It does NOT
+know whether the service on a peer is healthy, whether the LAN beneath it is
+fine, or what a Cloudflare Tunnel is doing. A peer can be `connected`, a policy
+can allow it, a proxy cluster can be online, and the application behind all
+three can still be down.
 
 ## Not available here
 

@@ -3,6 +3,46 @@
 For a Cloudflare account registered with a scoped custom API token. Everything
 runs through `hh cloudflare <op> [alias]`, or `hh cf` for short.
 
+## The model - what these objects are
+
+Read this before acting on anything below. The three layers here are
+independent, and most wrong answers come from treating them as one thing.
+
+- **Zone** - a domain Cloudflare is authoritative for. DNS records live in it.
+  `@` or the bare zone name means the apex.
+- **DNS record** - a name pointing somewhere. Two modes, and the difference
+  matters more than anything else on this page:
+  - **proxied** (orange cloud) - traffic goes through Cloudflare, and the origin
+    address is NOT visible in public DNS.
+  - **dns-only** (grey cloud) - the record answers with the origin address
+    itself, publishing it to anyone who looks.
+
+  `TTL 1` is Cloudflare's "auto", and TTL only has meaning for a dns-only
+  record; a proxied one is answered by Cloudflare's own edge.
+
+- **Tunnel** - an OUTBOUND connection from `cloudflared` on a host to
+  Cloudflare's edge. Nothing listens on your router; there is no port forward to
+  open or close. A tunnel being `healthy` means connectors are attached to the
+  edge - it says nothing about whether the service behind them is alive.
+- **Ingress rule** - inside a tunnel, a hostname -> local service mapping. The
+  list is ORDERED and must end in a catch-all.
+- **Publishing a hostname is TWO independent things**: an ingress rule on the
+  tunnel, AND a DNS CNAME pointing the hostname at
+  `<tunnel-id>.cfargotunnel.com`. Either without the other looks like a fault
+  and is not:
+  - rule but no CNAME -> the name does not resolve anywhere
+  - CNAME but no rule -> the name resolves, and the tunnel returns the
+    catch-all's error
+- **Access application** - an identity layer sitting in front of a hostname,
+  independent of how that hostname is served. A tunnel can serve a hostname with
+  or without Access on it, and Access can protect something not tunnelled at
+  all. "Behind a tunnel" and "behind Access" are different claims.
+
+Two consequences worth stating outright: `tunnel-unroute` stops serving a
+hostname but leaves its DNS record behind, which then starts returning errors
+until removed too; and turning a proxied record dns-only exposes the origin
+address permanently to anyone who was watching, which no later change undoes.
+
 ## Read and write, and which you have
 
 Write capabilities are available only when the alias was registered with a token
@@ -24,6 +64,7 @@ tunnel token <name>` on a trusted host - never through an agent session.
 
 - One-screen picture: `hh cloudflare summary`
 - Token validity and capability: `hh cloudflare ping`
+- Which account this alias resolves to, and how: `hh cloudflare account`
 - Raw account list: `hh cloudflare info`
 
 `summary` names any tunnel that is not healthy, and any zone that is not active.
@@ -79,6 +120,16 @@ not published until both are done.
 
 **DNS is cached.** A change does not reach everyone at once, and a wrong one
 outlives the moment it was made.
+
+## What Cloudflare cannot tell you
+
+It knows the edge: DNS as the world resolves it, whether a tunnel has live
+connections, what Access protects. It does NOT know whether the origin behind a
+tunnel is healthy - a tunnel reports `healthy` whenever its connectors are
+attached, including while the service behind them returns errors all day.
+
+If the account also runs NetBird BYOP, Cloudflare is not the only ingress
+either; a hostname absent here may be published through NetBird instead.
 
 ## Not available here
 

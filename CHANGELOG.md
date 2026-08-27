@@ -24,6 +24,124 @@ easy to get wrong and changes if a date is added to the heading.
 When adding a version, keep the three in sync: the anchor (`v1-1-0`), the git
 tag (`v1.1.0`), and `HH_VERSION` in `bin/hh` (`1.1.0`).
 
+<a id="v1-5-0"></a>
+
+## 1.5.0 (2026-08-27)
+
+Follow-ups to 1.4.0, from putting both integrations in front of a real account.
+
+### NetBird Bring Your Own Proxy
+
+BYOP makes NetBird an ingress path as well as an overlay: a service can be
+published under a domain you own, terminated by a reverse proxy you run, and
+forwarded to a peer over WireGuard.
+
+New read ops `proxies`, `services`, `service` and `domains` report the clusters
+and how many proxies are live, what is published through them, and the apex
+domains. `summary` gains proxy and service lines, and stays silent when BYOP is
+not in use rather than printing a reassuring zero. Creating and editing a
+service stays dashboard work.
+
+`services` reports exposure as **public** or **mesh-only**. That is the detail
+most easily misread from the dashboard: a mesh-only service has a real domain
+and a real certificate and is deliberately not on the internet.
+
+Because ingress can now be either path, `network-diag` asks both NetBird and
+Cloudflare before concluding a service is unpublished, and `cloudflare-ops`
+notes that a service missing from `tunnel-show` may simply be published through
+NetBird instead.
+
+A management server older than 0.72 answers 404 on every path under
+`/api/reverse-proxies`. The named BYOP ops say so plainly and exit clean, rather
+than relaying a bare HTTP 404; `summary` simply omits its BYOP lines. `hh
+netbird get` still reports the 404 verbatim, because someone typing a path by
+hand wants to know exactly what came back.
+
+`hh netbird get` now refuses the `proxy-tokens` endpoints. A proxy access
+token's plaintext is shown once at creation and registers a proxy against the
+whole account; NetBird's docs do not say whether the list endpoint returns it,
+and that is not a thing to establish by trying it with a live credential. This
+is the same guard `hh-cloudflare` carries for the tunnel token - one place in
+each API where "it can only issue a GET" stops being a sufficient safety
+argument.
+
+### Cloudflare account resolution
+
+The first real token to meet this broker could not resolve an account, and the
+message it got back was true but useless: "the token works, but it cannot see
+any Cloudflare account". The token was fine.
+
+`GET /accounts` lists accounts only when the token carries **Account Settings:
+Read**, and a token scoped to Cloudflare Tunnel and Access - exactly what `hh
+add-cloudflare` tells you to create - does not carry it. Cloudflare answers 200
+with an empty list rather than an error, so the broker relayed "no accounts",
+which is never true of a working token.
+
+Resolution now falls back to the zone list, where every zone carries the account
+it belongs to. Zone: Read is already required for the DNS ops, so this works on
+the narrower token at no extra cost. Failing both, the error names the two real
+fixes - grant Account Settings: Read, or set `ACCOUNT=` in the registry entry -
+and points out that the zone-scoped ops need neither.
+
+New `hh cloudflare account` reports which account an alias resolves to and
+whether that came from the cache or from Cloudflare just now. The failure was
+hard to see precisely because every account-scoped op failed identically and
+none said what account it was looking for.
+
+The registration prompt lists Account Settings: Read with an explanation of what
+it is for, and registration now resolves the account while the operator is still
+at the keyboard rather than on some later call.
+
+### Documentation
+
+Both capability catalogs now open with a **model section** - what the objects
+are and how they relate - ahead of the command list. The catalogs described what
+each op returns and the skills described when to reach for one, but neither said
+what a group or a tunnel actually *is*, which left the domain knowledge to be
+inferred.
+
+For NetBird that means stating outright that policies name groups and never
+individual peers, so access is granted by moving a peer between groups rather
+than editing a rule; that a connected peer may still be allowed to reach
+nothing; and that revoking a setup key does not remove the peers enrolled with
+it.
+
+For Cloudflare it means separating three layers that get conflated: a hostname
+is published only when an ingress rule AND a CNAME to
+`<tunnel-id>.cfargotunnel.com` both exist, Access sits in front of a hostname
+independently of how it is served, and turning a proxied record dns-only
+publishes the origin address in a way no later change undoes.
+
+### Capability boundaries
+
+Five of the seven capability catalogs had no section saying what their platform
+CANNOT tell you. Only `unifi.md` and `firewalla.md` did, and that section is the
+most direct guard against overclaiming: it is where "the VM is running" gets
+separated from "the service is up". All seven now have one.
+
+`proxmox.md` also gains the two model traps that produce confidently wrong
+answers: VMs and containers share one id space cluster-wide, so `qm` and `pct`
+are not interchangeable views of the same thing; and most commands are
+node-scoped, so a guest you cannot find in a cluster is usually on another node
+rather than gone.
+
+`ops/CLAUDE.md` now states that the three integrations are not fenced equally.
+UniFi and Firewalla cannot write at all; NetBird and Cloudflare can, behind a
+broker that refuses destructive ops without `--force`; and `hh run` on a shell
+host can do anything, fenced only by the permission prompt and by the
+"(confirm)" marks in the catalogs, which are instructions to the model rather
+than enforcement. Assuming that machinery is uniform is how a shell host gets
+treated more casually than the integrations that are actually the safer ones.
+
+### Fixes
+
+- `op_summary` and `op_account` in `hh-cloudflare` called `_account` inside a
+  command substitution, so the account name it resolved was discarded with the
+  subshell and the summary line printed a bare id for a name that had just been
+  looked up successfully.
+- `cmd_netbird`'s inline usage still listed the `policy` op, missed when the
+  read ops were renamed in 1.4.0 to avoid prefix-matching the write ops.
+
 <a id="v1-4-0"></a>
 
 ## 1.4.0 (2026-08-27)

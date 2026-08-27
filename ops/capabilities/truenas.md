@@ -119,6 +119,23 @@ state-changing and confirm first.
 
 - Certs: `midclt call certificate.query | jq '.[] | {name, common: .common}'`
 
+## What TrueNAS cannot tell you
+
+- Whether a share is actually being USED, or by whom, beyond current
+  connections. A dataset with no recent writes may be abandoned or may be a
+  perfectly healthy archive; nothing here distinguishes them.
+- Whether a SMART-passing disk is about to fail. SMART is evidence, not a
+  verdict; report the attributes rather than a prediction.
+- What an app's container is doing internally - `midclt call app.query` reports
+  the app's state as the middleware sees it, which can be `RUNNING` while the
+  service inside answers errors.
+- Anything off this box: the network, the mesh, other hosts.
+
+One caveat specific to this platform: the middleware (`midclt`) and the shell
+can disagree, because the middleware reports intended configuration and the
+shell reports what the kernel is actually doing. When they differ, say so rather
+than picking whichever supports the answer you already had.
+
 ## Logs
 
 - Middleware: `tail -100 /var/log/middlewared.log`
