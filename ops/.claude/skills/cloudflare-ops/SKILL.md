@@ -30,6 +30,22 @@ that the service is unreachable from outside. `hh cloudflare tunnels` asks
 Cloudflare's edge, which knows whether it still has connections, and answers
 either way.
 
+## Know the model before you change anything
+
+`capabilities/cloudflare.md` opens with what these objects are and how they
+relate. The three that get conflated:
+
+**A tunnel, a DNS record, and an Access application are independent.** A
+hostname is published only when BOTH an ingress rule and a CNAME to
+`<tunnel-id>.cfargotunnel.com` exist; either alone looks like a fault and is
+not. Access sits in front of a hostname regardless of how it is served, so
+"behind a tunnel" and "behind Access" are different claims - do not report one
+as the other.
+
+And the one that cannot be undone: turning a proxied record dns-only publishes
+the origin address to anyone watching. Making it proxied again does not unsee
+it.
+
 ## Start here
 
     hh cloudflare summary       # tunnels total/healthy, any that are down,

@@ -92,6 +92,26 @@ The registration prompt lists Account Settings: Read with an explanation of what
 it is for, and registration now resolves the account while the operator is still
 at the keyboard rather than on some later call.
 
+### Documentation
+
+Both capability catalogs now open with a **model section** - what the objects
+are and how they relate - ahead of the command list. The catalogs described what
+each op returns and the skills described when to reach for one, but neither said
+what a group or a tunnel actually *is*, which left the domain knowledge to be
+inferred.
+
+For NetBird that means stating outright that policies name groups and never
+individual peers, so access is granted by moving a peer between groups rather
+than editing a rule; that a connected peer may still be allowed to reach
+nothing; and that revoking a setup key does not remove the peers enrolled with
+it.
+
+For Cloudflare it means separating three layers that get conflated: a hostname
+is published only when an ingress rule AND a CNAME to
+`<tunnel-id>.cfargotunnel.com` both exist, Access sits in front of a hostname
+independently of how it is served, and turning a proxied record dns-only
+publishes the origin address in a way no later change undoes.
+
 ### Fixes
 
 - `op_summary` and `op_account` in `hh-cloudflare` called `_account` inside a

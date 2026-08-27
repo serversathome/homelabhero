@@ -35,6 +35,21 @@ it. `hh netbird peers` asks the control plane, which still answers.
 So: when someone reports a host is unreachable, come here BEFORE trying to shell
 into it. The answer is often visible in one line of `hh netbird summary`.
 
+## Know the model before you change anything
+
+`capabilities/netbird.md` opens with what these objects are and how they relate.
+The load-bearing one, because it is not how a firewall works:
+
+**Policies name GROUPS, never individual peers.** Granting a host access means
+putting it in a group a policy already names, not editing a rule to mention it.
+`group-add` and `group-rm` are how access is given and taken away; reaching for
+`policy-enable` or a policy edit when a group move is the answer is the most
+common way to get this wrong.
+
+Two more that read wrong if you assume otherwise: a peer being `connected` says
+nothing about whether policy lets it reach anything, and revoking a setup key
+does not remove the peers already enrolled with it.
+
 ## Start here
 
     hh netbird summary        # peers, connected, offline, waiting approval,
