@@ -29,554 +29,72 @@ troubleshooting skills, and wires up a credential broker so Claude can operate
 your TrueNAS, Proxmox, and Linux machines over SSH without ever seeing a single
 credential.
 
-## Install and update
-
-On a fresh Ubuntu 26.04 LXC, run one command. (The installer is Ubuntu/Debian
-only: it uses `apt`, `systemd`, and `visudo`. It has not been tested on other
-distros.) A new LXC usually has only a root user and no curl, so this installs
-curl first (drop the `apt` part if you already have curl; add `sudo` in front of
-`apt` if you run as a non-root user):
-
-    apt update && apt install -y curl && \
-      curl -fsSL https://raw.githubusercontent.com/serversathome/homelabhero/main/install.sh | bash
-
-Then just answer the prompts. The script installs everything, walks you through
-signing Claude in once, finds and adds your servers, and finishes by handing you
-a browser link.
-
-When it finishes, open the web UI in your browser on **port 3001**:
-
-    http://<your-lxc-ip>:3001
-
-The installer prints that exact address with the IP filled in as its last line.
-(3001 is the default; if you changed `PORT=` in `/etc/homelabhero/cloudcli.env`,
-use that port instead.) On your first visit, create your web login, open the
-`homelab-ops` project, and — if it asks — click the gear icon and turn tools on.
-
-From that point on you live in the web UI and talk to Claude in plain language
-("how is everything doing", "what's running", "restart jellyfin"). You do not
-need to remember any commands.
-
-The `hh` commands below still exist for power users and are available in the web
-UI's built-in terminal, but the normal experience is the browser.
-
-### Updating to the latest code
-
-You do not have to do anything. Updates arrive on their own: the weekly job runs
-`hh update`, and you can run it yourself any time to force the latest right now:
-
-    hh update
-
-That is the one command. It pulls the latest HomelabHero, re-runs the installer
-non-interactively to refresh everything (CLI and broker, skills, `CLAUDE.md`,
-capability docs, Node/npm at the latest LTS, the Claude Code + claudecodeui
-packages, the service), then patches the OS and runs a health check. It is a
-**reinstall, not a reconfigure** and fully idempotent: it keeps your users, your
-credentials, your registered hosts (your `hh list` is left exactly as-is), and
-your ops notes, and skips Claude sign-in if you are already signed in. See
-[Staying up to date](#staying-up-to-date-with-homelabhero-itself) for exactly
-what it does and does not touch.
-
-If you are onboarding a box that predates self-update (no
-`/etc/homelabhero/install.conf`), run the install one-liner once to enable it,
-after which `hh update` maintains it:
-
-    apt update && apt install -y curl && \
-      curl -fsSL https://raw.githubusercontent.com/serversathome/homelabhero/main/install.sh | bash
-
-To see which version you are on and what changed between releases:
-
-    hh version
-
-[CHANGELOG.md](CHANGELOG.md) explains every release: what was added, what
-changed, and anything worth knowing before you update.
-
-
-## Commands
-
-    hh list                      registered hosts (no secrets)
-    hh run <alias> "<command>"   run a command on a host via the broker
-    hh test <alias>              connectivity check
-    hh overview                  read-only vitals sweep across all hosts
-    hh inventory [alias]         what is RUNNING (VMs, LXCs, containers, apps)
-    hh diff [alias]              inventory drift vs the last saved snapshot
-    hh scan [cidr]               discover live hosts (and your router) on the network
-    hh unifi <op> [alias]        read your UniFi router: summary, health, devices,
-                                 clients, networks (READ-ONLY, see below)
-    hh firewalla <op> [alias]    read your Firewalla: summary, devices, alarms,
-                                 flows, bandwidth, rules (READ-ONLY, see below)
-    hh netbird <op> [alias]      read and manage your NetBird mesh: peers, groups,
-                                 policies, routers, DNS, keys (see below)
-    hh cloudflare <op> [alias]   read and manage Cloudflare: DNS records, tunnels,
-                                 Access apps (see below)
-    hh doctor                    check the whole setup is healthy
-    hh provision <alias> <host> [port] [platform] [user]
-                                 register a host with a generated key (UI-safe);
-                                 connects as root by default (pass a user to override)
-
-    hh add-host                  register a host (operator)
-    hh add-unifi                 register your UniFi router with an API key (operator)
-    hh add-firewalla             register your Firewalla with an MSP token (operator)
-    hh add-netbird               register your NetBird mesh with a service-user token (operator)
-    hh add-cloudflare            register Cloudflare with a scoped API token (operator)
-    hh repin <alias>             re-pin a UniFi console or self-hosted NetBird server
-                                 after its cert changed (operator)
-    hh rm-host <alias>           remove a host and its credential
-    hh update                    update everything now: HomelabHero + OS (operator)
-    hh login                     log Claude Code in as the agent user
-    hh audit [lines]             review the broker audit log (operator)
-    hh version                   print the version and a link to the changelog
-
-## The idea
-
 - A control-plane LXC that reaches everything else. It runs the UI and the agent;
   the workloads stay on your real machines.
 - Claude connects only through `hh run <alias> "<command>"`. Same command for
   TrueNAS, Proxmox, and any Linux host, all reached as a normal shell over SSH.
-- Credentials never touch the LLM (see below).
+- Credentials never touch the LLM, and cannot: they live in a vault the agent
+  user has no permission to read.
 
-## Credential isolation (the important part)
+## Install
 
-HomelabHero uses privilege separation with a connection broker. Three users:
+On a fresh Ubuntu 26.04 LXC, one command. (Ubuntu/Debian only - it uses `apt`,
+`systemd` and `visudo`.)
 
-- your operator account (installs, registers hosts)
-- `hhagent` (runs Claude and the web UI, deliberately low-privilege)
-- `hhvault` (owns every credential, mode 700)
+    apt update && apt install -y curl && \
+      curl -fsSL https://raw.githubusercontent.com/serversathome/homelabhero/main/install.sh | bash
 
-Claude runs as `hhagent`, which cannot read anything `hhvault` owns. To reach a
-host, Claude runs `hh run`, which invokes the broker `hh-connect` through a single
-narrow sudoers rule (`hhagent` may run only that broker, its API siblings
-`hh-unifi`, `hh-firewalla`, `hh-netbird` and `hh-cloudflare`, and
-`hh-provision`, and only as `hhvault`).
-The broker looks the host up in the non-secret registry, reads the key or password
-from the vault, and opens the connection. Claude gets the output, never the secret.
-An API credential works the same way: the four API brokers read the UniFi API
-key, Firewalla MSP token, NetBird service-user token or Cloudflare API token
-from the vault and pass it to curl through a config file on stdin, never on the
-command line, so it never appears in `/proc` where the agent user could read it.
+Answer the prompts. It installs everything, signs Claude in once, finds and adds
+your servers, and prints a browser link on **port 3001** when it finishes.
 
-Two of those four can also make changes (NetBird and Cloudflare), and sudoers is
-not what limits that - it grants only the ability to RUN a broker. What limits it
-lives inside the brokers themselves: no generic write path, only named ops with
-hardcoded methods and paths, `--force` required on anything destructive, and a
-per-alias record of whether its credential may write at all.
-Even a fully hijacked agent cannot exfiltrate a credential, because the OS will not
-let it read the vault and will not let it run anything but the broker as `hhvault`.
-The broker also refuses loopback targets and unregistered aliases.
+Full walkthrough, updating, and how to add machines afterwards:
+**[docs/install.md](docs/install.md)**.
 
-Every brokered command and host registration is recorded to
-`/var/log/homelabhero-broker.log`, owned by `hhvault` and unreadable by the agent,
-so a hijacked agent can neither read past activity nor erase its own tracks. The
-log rotates weekly (`/etc/logrotate.d/homelabhero`). Review it as an operator with
-`hh audit [lines]` (needs sudo; the agent cannot read it, by design).
+## What it can do
 
-What this protects: credential material never enters Claude's context and cannot be
-exfiltrated. What it does not do: restrict what Claude may run on a host it is
-already allowed to reach. That is handled by the approval prompts and confirm-first
-rule in the ops brain. Two layers, both kept.
+    hh list                      registered hosts (no secrets)
+    hh run <alias> "<command>"   run a command on a host via the broker
+    hh overview                  read-only vitals sweep across every host
+    hh inventory                 what is RUNNING everywhere (VMs, LXCs, containers, apps)
+    hh scan [cidr]               discover live hosts on the network
+    hh doctor                    check the whole setup is healthy
 
-Register hosts from a real admin shell (not the Claude web terminal) so the secrets
-you type never pass through an LLM-driven session.
+and four networking integrations, each reached over its own API rather than a
+shell:
 
-## What Claude knows
-
-- Full platform capability catalogs (`ops/capabilities/`) for Proxmox, TrueNAS, and
-  Linux, so Claude uses the whole toolset of each system, not just the basics.
-- Live inventory via `hh inventory`: Proxmox VMs and LXCs, TrueNAS VMs, LXCs,
-  apps and pools, and Docker containers wherever they run. `hh inventory --save`
-  snapshots into `ops/inventory/` so state changes show up in git over time.
-- Environment-specific notes about your setup in `ops/infra/`.
-
-## Discovery (point and click)
-
-`hh scan` sweeps your subnet (auto-detected, or pass a CIDR) for live management
-endpoints and guesses what each is (Proxmox on 8006, SSH on 22, and so on), marking
-which are already registered. `hh scan --add` turns that into a picker: choose the
-numbers you want and it walks you through registering each, pre-filling the address
-and platform.
-
-It also looks for your **router**. Anything sitting at your default gateway or at
-the `.1` of the subnet (`192.168.1.1`, `10.99.0.1`, and so on) gets fingerprinted,
-and a UniFi console is identified by name and version:
-
-    #    IP               OPEN PORTS           GUESS            ROLE      REGISTERED?
-    1    10.99.0.1        22,80,443            unifi            gateway   new
-    2    10.99.0.20       22,443               truenas?/linux   -         registered
-
-    Found your router: a UniFi OS console running Network 9.0.114 at 10.99.0.1
-
-Pick it during install (step 10) or any time after, and it registers with an API
-key instead of SSH. This is the router integration below.
-
-## Your UniFi router (read-only, on purpose)
-
-A UniFi console (UDM, UCG, Cloud Key Gen2+, UniFi OS Server, on Network 9.0 or
-newer) can be registered alongside your servers. It shows up in `hh list` like
-anything else, and `hh overview` and `hh inventory` include it:
-
-    Console   10.99.0.1   Network 9.0.114
-    WAN       ok      ip 203.0.113.7   gateway UCG-Ultra 4.2.14   isp Example ISP
-    Internet  ok      latency 12 ms   down/up 940.5/88.2 Mbps   uptime 1209600s
-    LAN       ok      41 clients, 2 switches, 3 adopted, 0 offline
-    WiFi      ok      38 clients, 2 APs, 2 adopted, 0 offline
-    Devices   5 adopted, 5 online
-    Updates   firmware available for 1 device: Office AP
-    Clients   43 connected
-
-That means "the internet is down", "which access point is offline", "is that
-machine actually on the network", and "what VLAN is it on" become questions
-Claude can answer from the gateway itself, instead of inferring from the hosts.
-
-**It can only read. It cannot change anything on your network.** That is enforced
-in three independent places, not just asked for in a prompt:
-
-1. The broker behind `hh unifi` issues HTTP `GET` and has no code path that can
-   `POST`, `PUT`, `PATCH`, or `DELETE`. There is no restart, no reboot, no
-   firewall, VLAN, SSID, or port-forward edit, because none of it is implemented.
-2. You mint the API key under a **View Only** UniFi admin, so the console itself
-   refuses writes from that key regardless of what asks.
-3. The ops brain and the `unifi-ops` skill tell Claude the rule plainly, and tell
-   it what to do instead: explain the change you should make in the UniFi app,
-   then read the state back to confirm it worked.
-
-The router is the one device whose failure takes away the access you would need
-to fix it. A bad firewall rule or an ill-timed reboot can cut off every host, the
-command center, and you, all at once. Reading it is enormously useful; letting an
-agent write to it is not worth that.
-
-Register it from an admin shell (an API key is a secret being typed, so it stays
-out of the chat, exactly like password auth):
-
-    hh add-unifi
-
-It walks you through creating the key in the UniFi app, stores it in the vault
-where the agent cannot read it, and pins the console's TLS public key on first
-contact (trust on first use, like SSH). If you later replace the console's
-certificate, `hh repin <alias>` accepts the new one; until you do, calls fail
-closed rather than quietly trusting a new identity.
-
-## Your Firewalla (read-only, on purpose)
-
-A Firewalla (Gold, Gold SE, Gold Plus, Purple, Blue Plus) can be registered the
-same way. It shows up in `hh list` like anything else, and `hh overview` and
-`hh inventory` include it:
-
-    MSP       yourname.firewalla.net
-    Box       Home Firewalla (gold, router mode, v1.975)   online   public IP 203.0.113.7
-    Counts    41 devices, 34 rules, 6 alarms
-    Devices   41 known, 39 online
-    Offline   2: Office Printer, Garage Camera
-    Alarms    3 most recent active:
-              08-19 21:04  Abnormal upload from Desktop-PC
-
-So "is that machine actually on the network", "what is eating my internet", "why
-can't this reach that", and "anything alarming overnight" become questions Claude
-answers from the router itself.
-
-One difference from UniFi worth knowing: Firewalla ships no supported local API,
-so this reads Firewalla MSP - Firewalla's own management portal - over the
-internet, at `https://<yourname>.firewalla.net`. You need an MSP account, and
-when your internet is down this is down with it, so it is a poor first probe for
-"is the internet up" and a good one for everything else.
-
-**One alias is one box.** An MSP token is scoped to your account, not to a box,
-so `hh add-firewalla` asks which Firewalla the alias means when the token can
-see more than one, and every read is filtered to it. Two sites means two
-aliases, registered with the same token, and `hh firewalla devices cabin` says
-which you want. `hh firewalla boxes` lists them all and marks the one an alias
-reads. To change which box an alias means: `hh rm-host <alias> && hh add-firewalla`.
-
-One read stays account-wide even so: `hh firewalla trends` filters by MSP
-*group* rather than by box, and its output says as much rather than passing an
-account-wide number off as one box's. If you want per-box trends, put the box in
-an MSP group of its own and read that group directly:
-
-    hh firewalla get '/v2/trends/flows' 'group=<group-id>'
-
-Per-box numbers obtained that way sum back to the account-wide total. (Thanks to
-@lesterktm for testing this on a live multi-box account.)
-
-**It can only read. It cannot change anything on your network.** Note that here
-that rests on *one* lock rather than UniFi's two:
-
-1. The broker behind `hh firewalla` issues HTTP `GET` and has no code path that
-   can `POST`, `PUT`, `PATCH`, or `DELETE`. No pause, no unpause, no rule edit,
-   no rename, no reboot, because none of it is implemented.
-2. There is no second lock, and the setup says so out loud. Firewalla MSP has no
-   read-only token: a personal access token carries the permissions of the
-   account that made it. The GET-only broker is the only thing making that token
-   safe to hold, which is why it is worth reading `bin/hh-firewalla` before you
-   trust it, and why the token is stored where the agent cannot read it.
-3. The ops brain and the `firewalla-ops` skill tell Claude the rule plainly, and
-   tell it what to do instead: explain the change you should make in the
-   Firewalla app or MSP, then read the state back to confirm it worked.
-
-If you would rather not hold an MSP token at all, that is a legitimate choice.
-Skip this and keep reading your Firewalla in its own app; everything else in
-HomelabHero works without it.
-
-Register it from an admin shell (a token is a secret being typed, so it stays out
-of the chat, exactly like password auth):
-
-    hh add-firewalla
-
-It asks for your MSP domain - `yourname.firewalla.net`, not the box's LAN address
-- and the token, which it stores in the vault where the agent cannot read it.
-There is no TLS pin here, unlike UniFi: an MSP domain has a publicly trusted
-certificate, so ordinary CA verification already applies and is the stronger
-check.
-
-## Your NetBird mesh (read, and write if you let it)
-
-The mesh is how the command center reaches hosts wherever they are, and until
-now HomelabHero could only see it from inside one peer:
-
-    hh run <alias> "netbird status"
-
-That is one peer's opinion, and it is unavailable exactly when it matters -
-when the host you would ask is the host that is down. Registering NetBird asks
-the control plane instead:
-
-    hh netbird summary
-    hh netbird peers
-    hh netbird policies
-
-`summary` names things rather than counting them: which peers are offline and
-how long they have been, which are waiting for approval, and which are running
-an older agent than the rest of the fleet. That last one is the most common
-cause of a mesh that works unevenly, and it is invisible from any single peer.
-
-Register it from an admin shell:
-
-    hh add-netbird
-
-It asks you to create a NetBird **service user** - a non-interactive account
-made for exactly this - and a token under it. The role you give that service
-user is the important choice:
-
-- **User** is read-only. Every read above still works.
-- **Admin** can also change the mesh, which turns on `approve`, `group-add`,
-  `policy-enable`, `rm-peer` and the rest.
-
-Pick User unless you actually want Claude able to change the mesh. HomelabHero
-records which you chose, and a read-only alias refuses every write immediately
-rather than failing at the far end.
-
-If you pick Admin, here is the honest trade. Every read then runs with a
-credential that could have written, so the broker's shape is the only lock
-rather than the second one. That shape is: no generic write path at all - only
-named ops with methods and paths hardcoded in the broker - and anything
-destructive refuses to run without `--force`, printing exactly what it would
-have done first. Removing the command center's own peer gets a louder refusal
-still, because that is the one change that takes away the mesh you would use to
-undo it.
-
-One thing is refused outright and stays refused: `hh netbird key-create` will
-not run without a terminal. NetBird shows a setup key's plaintext exactly once,
-so running it in an agent session would put the only copy into a transcript.
-
-If you run **Bring Your Own Proxy**, that is covered too: `hh netbird proxies`,
-`services` and `domains` show the clusters, what is published through them, and
-whether each service is public or mesh-only. Worth knowing because it makes
-ingress two paths rather than one - a service missing from your Cloudflare
-tunnels may simply be published through NetBird instead. Proxy access tokens are
-deliberately out of reach: `hh netbird get` refuses those endpoints.
-
-Self-hosted NetBird works too - give `hh add-netbird` your management host
-instead of `api.netbird.io`, and if it presents its own certificate rather than
-a publicly trusted one, HomelabHero pins it the way it pins a UniFi console.
-
-## Cloudflare: DNS, Tunnels, and Access
-
-Cloudflare is the front door. Same problem as the mesh, same fix: asking the
-host running `cloudflared` tells you nothing when that host is down, and
-Cloudflare's edge answers either way.
-
-    hh cloudflare summary
-    hh cloudflare tunnels
-    hh cloudflare tunnel-show <name>     # which hostname maps to which service
-    hh cloudflare records <zone>
-
-Register it from an admin shell:
-
-    hh add-cloudflare
-
-It asks for a **custom API token** - never the Global API Key, which cannot be
-scoped and would put full account control in the vault. It tells you exactly
-which permissions to tick, and which to use if you want writes as well as
-reads. Scope it to the specific zones your homelab uses while you are there: a
-token scoped to one zone cannot touch another even if something ever reached it
-outside this broker.
-
-With an Edit token you also get `dns-set`, `dns-proxy`, `dns-delete`,
-`tunnel-route`, `tunnel-unroute`, `purge` and `access-revoke`, under the same
-rules as NetBird: named ops only, and `--force` on anything destructive. Two
-extras specific to Cloudflare:
-
-- Repointing a DNS record that currently points at the command center gets the
-  louder refusal, for the same reason removing your own mesh peer does.
-- The read escape hatch refuses the handful of endpoints that return a
-  credential instead of describing one - the tunnel token above all. Everywhere
-  else in HomelabHero "it can only issue a GET" is the whole safety argument;
-  Cloudflare is the one API where that is not quite true, so the broker names
-  those paths and declines them.
-
-### Why not the Cloudflare Claude connector
-
-Cloudflare publishes a remote MCP server that Claude can connect to directly.
-It is a good product, and it is the wrong shape for this: the credential would
-live with the agent instead of in the vault, nothing would constrain which verb
-it used, no line would land in the broker audit log, and none of it would travel
-with the `hh` install or work from cron. The connector is worth adding for
-Cloudflare's *documentation* server, which holds no account access at all. For
-your account, the broker keeps the guarantees the rest of HomelabHero makes.
-
-## Adding servers from the UI
-
-You do not have to shell in to add machines. Just ask Claude in the browser, e.g.
-"add my TrueNAS at 10.0.0.20". Claude runs `hh provision`, which registers the
-host and generates a keypair in the vault, then hands you the public key to paste
-into the target's admin UI (TrueNAS user SSH keys, Proxmox authorized_keys, or a
-Linux authorized_keys). No password ever passes through the chat, and the agent
-never sees the private key. `hh test <alias>` confirms it once the key is
-installed. Password-based onboarding stays in the shell-only `hh add-host` for an
-admin, since a password can't be handled safely in an LLM session.
-
-## Auto-updates and health
-
-One command does everything. A weekly cron job (`/etc/cron.d/homelabhero`, Sundays at
-04:00) runs `hh update`, logging to `/var/log/homelabhero-update.log`. Edit that one
-file to change the schedule, or delete it to turn auto-update off. Run it any time with
-`hh update`.
-
-`hh update` does three things in order:
-
-1. **Update HomelabHero itself** (see below).
-2. **Update the OS packages** (`apt`).
-3. **Run a health check** (`hh doctor`).
-
-### Staying up to date with HomelabHero itself
-
-For step 1, `hh update` `git pull`s the branch you installed from (`main` unless you
-changed it) and **re-runs the installer non-interactively** - so an update produces
-exactly what a fresh install does:
-the `hh` CLI and broker, the shipped skills / `CLAUDE.md` / capability docs, Node and
-npm at the latest LTS, the Claude Code + claudecodeui packages (reinstalled with the
-correct `--allow-scripts` set so their native modules always build), and the systemd
-unit. Improvements and fixes pushed to the repo reach existing boxes on their own;
-nobody has to re-run the installer by hand.
-
-Because it re-runs the real installer, there is no "some changes only the installer can
-apply" gap - `hh update` **is** the installer, plus the OS pass. Node tracks the latest
-LTS automatically each week.
-
-What it will and will not touch is deliberate:
-
-- **Refreshed** (HomelabHero-owned): the CLI binaries, `.claude/skills/`,
-  `.claude/settings.json`, `CLAUDE.md`, `capabilities/`, the logrotate/sudoers/service
-  templates, and the Node/npm stack.
-- **Never touched** (yours): `CLAUDE.local.md`, your environment notes under `infra/`,
-  `inventory/`, `runbooks/`, `hosts/`, your edited cron schedule, and `cloudcli.env`.
-  Your own custom skills in `.claude/skills/` are preserved too.
-
-**Your edits to a shipped file are not overwritten.** HomelabHero keeps a pristine
-copy of what it last delivered, under `/etc/homelabhero/shipped/`, and compares three
-ways on every update - the same way `dpkg` handles a config file:
-
-| your file vs. last shipped | upstream changed? | what happens |
+| | what it reads | can it change anything? |
 |---|---|---|
-| unchanged | yes | the update lands, silently |
-| you edited it | no | left alone, silently |
-| you edited it | yes | **your copy is kept**; the new one is written beside it as `<file>.upstream` and named in the update output |
+| [UniFi](docs/integrations/unifi.md) | WAN and internet health, APs, switches, clients, VLANs | **no** - the broker cannot issue anything but a GET |
+| [Firewalla](docs/integrations/firewalla.md) | devices, alarms, flows, bandwidth, rules | **no** - same |
+| [NetBird](docs/integrations/netbird.md) | mesh peers, groups, policies, routes, BYOP services | yes, with an Admin token |
+| [Cloudflare](docs/integrations/cloudflare.md) | DNS, tunnels and their ingress, Access apps | yes, with an Edit token |
 
-Nothing is overwritten without saying so, and nothing is deleted. `hh doctor` reports
-how many shipped files you have edited and whether any `.upstream` versions are
-waiting to be merged.
+Every subcommand and every per-integration op: **[docs/commands.md](docs/commands.md)**.
 
-The one exception is the first update after this behaviour shipped: with no pristine
-copy to compare against yet, an edit is indistinguishable from an old version, so the
-update lands and your previous file is saved as `<file>.bak-<timestamp>`. Every run
-after that preserves in place instead.
+## Why the credentials are safe
 
-Even so, the best home for local additions is **`CLAUDE.local.md`**, which `CLAUDE.md`
-imports and the installer never touches. Put your name, your house rules, and pointers
-to your own docs there and there is nothing to merge, ever. The ops brain is also a git
-repo, so `git -C ~hhagent/homelab-ops diff` still shows what an update changed.
+Claude runs as `hhagent`, which cannot read anything the vault user owns. To
+reach a machine it runs `hh run`, which invokes a broker through a single narrow
+sudoers rule. The broker looks the host up, reads the key from the vault, opens
+the connection, and hands back only the output. Even a fully hijacked agent
+cannot exfiltrate a credential, because the OS will not let it read the vault.
 
-Because an update can occasionally break something, `hh doctor` checks the whole
-chain in one pass: the users, the broker, vault permissions, the service, Claude's
-version, every host's reachability, and the last update result. Run it any time; the
-auto-update runs it for you after each update.
+The two integrations that CAN change something are fenced separately: no generic
+write path, only named operations, and anything destructive refuses to run
+without `--force`.
 
-## Layout
+The whole model, including what is *not* protected:
+**[docs/security.md](docs/security.md)**.
 
-    homelabhero/
-    ├── install.sh                 one-line entrypoint (clone + run setup)
-    ├── setup/main.sh              full installer
-    ├── bin/
-    │   ├── hh                     control CLI (agent- and operator-facing)
-    │   ├── hh-connect             privileged SSH broker (runs as hhvault)
-    │   ├── hh-unifi               read-only UniFi API broker (runs as hhvault)
-    │   ├── hh-firewalla           read-only Firewalla MSP broker (runs as hhvault)
-    │   ├── hh-netbird             NetBird mesh broker, read+write (runs as hhvault)
-    │   ├── hh-cloudflare          Cloudflare broker, read+write (runs as hhvault)
-    │   ├── hh-provision           key-only host registration (UI-safe add)
-    │   └── hh-update              the one update command: git pull + re-run
-    │                              installer headless, then OS packages + doctor
-    ├── templates/                 sudoers, systemd unit, cron job, cloudcli env,
-    │                              logrotate rules, bash completion
-    └── ops/                       becomes ~hhagent/homelab-ops (git-backed)
-        ├── CLAUDE.md              always-loaded context + house rules
-        ├── capabilities/          per-platform capability catalogs
-        │                          (proxmox, truenas, linux, unifi, firewalla)
-        ├── infra/                 environment-specific references
-        ├── inventory/             saved inventory snapshots
-        ├── runbooks/              resolved incidents accumulate here
-        └── .claude/
-            ├── settings.json      permission posture (forces the broker)
-            └── skills/            triage, inventory, add-server, proxmox,
-                                   truenas, truenas-middleware, docker,
-                                   host (linux), network, unifi and firewalla
-                                   (both read-only), backup-restore,
-                                   security-audit, patch-management, deploy-app
+## Documentation
 
-## Platform notes
-
-- TrueNAS, Proxmox, Linux: SSH key auth to the admin user. Keys are generated into
-  the vault by `hh add-host`. Password auth is supported for stragglers but
-  discouraged; a plaintext secret is only as isolated as the user boundary around
-  it, which is exactly why the three-user split matters.
-- Hosts are reached as root by default, so commands run directly with no sudo. On
-  TrueNAS you can connect as `truenas_admin` instead (pass it to `hh provision`);
-  `midclt` reaches the middleware and covers most TrueNAS work regardless.
-- TrueNAS changed its VM engine twice (libvirt through 24.10, Incus on 25.04 and
-  25.10, back to libvirt on 26), and the middleware method names moved with it.
-  Inventory queries both namespaces, so VMs and LXCs are listed on any of them
-  with nothing to configure. On 26, which is still beta, LXC containers may not
-  be listed yet if they sit under a namespace neither of those covers.
-- UniFi: API key, read-only, never SSH. A UniFi console is registered with
-  `hh add-unifi` and reached with `hh unifi <op>`; `hh run` refuses it and says
-  so. Needs UniFi OS (UDM, UCG, UDR, Cloud Key Gen2+, UniFi OS Server) on
-  Network 9.0 or newer, since API keys do not exist on the old self-hosted
-  Network application.
-- Firewalla: MSP personal access token, read-only, never SSH. Registered with
-  `hh add-firewalla` and reached with `hh firewalla <op>`; `hh run` refuses it and
-  says so. Firewalla ships no supported local API, so this goes through Firewalla
-  MSP over the internet and needs an MSP account - and it goes down when your
-  internet does. Unlike UniFi there is no view-only token to mint, so the
-  GET-only broker is the only thing keeping that token from being able to write.
-- No MCP servers and no Grafana/Prometheus. The whole surface is SSH, two
-  read-only router APIs, plus the capability catalogs, kept simple on purpose.
-
-## Persistence and backup
-
-Everything lives on the LXC rootfs, which persists across reboots. Put the LXC on a
-snapshotted dataset and add it to your Proxmox backup schedule. The ops brain is a
-git repo; push it to your own GitHub for a second copy. The vault is intentionally
-excluded from anything git-tracked.
-
-Note that snapshots and backups of the LXC *do* contain the vault, and the vault
-keys are stored unencrypted (they have to be, for non-interactive automation).
-Their safety rests on the `hhvault` user boundary, which a raw filesystem copy
-bypasses, so treat those backups as secret material: keep them somewhere only you
-can reach, exactly as you would the private keys themselves.
+| | |
+|---|---|
+| [Installing and adding machines](docs/install.md) | first install, discovery, registering hosts |
+| [Command reference](docs/commands.md) | every `hh` subcommand |
+| [The security model](docs/security.md) | credential isolation, what the agent knows, how strongly each integration is fenced |
+| [Updating and health](docs/updating.md) | `hh update`, the weekly job, `hh doctor` |
+| [Layout, platforms, persistence](docs/layout.md) | where things live, per-platform notes, what to back up |
+| [Integrations](docs/README.md) | [UniFi](docs/integrations/unifi.md) · [Firewalla](docs/integrations/firewalla.md) · [NetBird](docs/integrations/netbird.md) · [Cloudflare](docs/integrations/cloudflare.md) |
+| [CHANGELOG](CHANGELOG.md) | what changed, per release |
+| [SECURITY](SECURITY.md) | reporting a vulnerability |
