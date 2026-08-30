@@ -437,7 +437,7 @@ op_lists() {
   j="$(_get "${API}/target-lists" "owner=global,firewalla,${gid}")"
   _expect_array "$j" "${API}/target-lists"
   printf '%s' "$j" | jq -r "${JQ_FMT}"'
-    .[] | "\(.name // "?")\t\(.id // "-")\t\(.owner // "-")\t\(.category // "-")\t\((.targets // []) | length)\t\(.lastUpdated | when)"' \
+    .[] | "\(.name // "?")\t\(.id // "-")\t\(.owner // "-")\t\(.category // "-")\t\(.count // ((.targets // []) | length))\t\(.lastUpdated | when)"' \
     | awk -F'\t' 'BEGIN{printf "%-28s %-40s %-10s %-10s %8s %-12s\n","NAME","ID","OWNER","CATEGORY","TARGETS","UPDATED"}
                   {printf "%-28s %-40s %-10s %-10s %8s %-12s\n",$1,$2,$3,$4,$5,$6}'
 }
