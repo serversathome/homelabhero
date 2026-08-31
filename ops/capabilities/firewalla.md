@@ -110,18 +110,24 @@ entry explains it far more often than the service does.
 - MSP-wide statistics: `hh firewalla stats <topBoxesByBlockedFlows |
   topBoxesBySecurityAlarms | topRegionsByBlockedFlows>`
 
-`trends` is the one read that the box pin does NOT narrow, because the endpoint
-filters by MSP GROUP rather than by box. On a single-box account that makes no
-difference. On a multi-box account it covers the whole account, and the output
-says so rather than letting an account-wide number pass as this box's.
+`trends` cannot be narrowed by the box pin directly, because the endpoint filters
+by MSP GROUP rather than by box. It resolves that itself: if the pinned box
+belongs to a group, the group is passed automatically, which makes the numbers
+per-box whenever that group holds only this box - the common arrangement.
 
-Putting a box in an MSP group of its own is what unlocks per-box trends. Once it
-is grouped, ask for that group through the escape hatch:
+Every run states what it actually covers, and that line is the thing to read
+before quoting a number:
 
-    hh firewalla get '/v2/trends/flows' 'group=<group-id>'
+    Daily flows, covering box group Home Site, which holds only this box.
+    Daily flows, covering box group Sites, which holds 3 boxes including this one.
+    Daily flows, covering the whole MSP account - this box is in no MSP group.
 
-Per-box numbers obtained this way sum back to the account-wide total, so the two
-views stay consistent.
+A group holding several boxes is NOT this box, however convenient that would be
+to report, so the count is named. If the box is in no group, the read is
+account-wide and the output says to put it in a group of its own to get per-box
+figures - after which this command picks the group up on its own, with no id to
+pass by hand. Per-box numbers obtained this way sum back to the account-wide
+total, so the two views stay consistent.
 
 ## Anything else (raw GET)
 

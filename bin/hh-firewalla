@@ -448,19 +448,85 @@ op_trends() {
     flows|alarms|rules) : ;;
     *) die "usage: hh firewalla trends [alias] <flows|alarms|rules>" ;;
   esac
-  # The trends endpoints filter by MSP GROUP, not by box, so on a multi-box
-  # account they cover the whole account by default however this alias is
-  # pinned. Reporting that as "your box" would be wrong, so say what it is.
-  # Putting a box in a group of its own is what makes these per-box: the group
-  # id then goes through the escape hatch, e.g.
-  #     hh firewalla get '/v2/trends/flows' 'group=<id>'
-  local j; j="$(_get "${API}/trends/${what}")"
+
+  # Trends are the one read the box pin cannot narrow directly: these endpoints
+  # filter by MSP GROUP, not by box. But a box usually sits in a group, and a
+  # group often holds just that box, so resolve the group this box belongs to
+  # and ask for it - that turns the common case into a per-box answer without
+  # the caller needing to know any ids.
+  #
+  # Where it cannot (the box is in no group), fall back to the account-wide
+  # read and say so. What is NOT acceptable either way is letting a number pass
+  # for a scope it does not have, so every path below states what it covers -
+  # including how many boxes are in the group, since a group with three boxes
+  # in it is not "this box" however convenient that would be to say.
+  #
+  # The group field is thinly documented: nullable, and seen in the wild both as
+  # an object with an id and as a bare id string. Handle both, and treat
+  # anything else as "no group" rather than guessing.
+  local gid boxes grp grpname peers j scope
+  gid="$(_gid)"
+  boxes="$(_get "${API}/boxes")"
+  _expect_array "$boxes" "${API}/boxes"
+  grp="$(printf '%s' "$boxes" | jq -r --arg g "$gid" '
+    def as_id: if type == "object" then (.id // empty)
+               elif type == "string" then .
+               elif type == "number" then tostring
+               else empty end;
+    first(.[] | select(.gid == $g)) as $box
+    | ($box.group // null) as $grp
+    | if $grp == null then empty
+      elif ($grp | type) == "array" then
+        (if ($grp | length) == 1 then ($grp[0] | as_id) else empty end)
+      else ($grp | as_id) end' 2>/dev/null || true)"
+
+  if [ -n "$grp" ]; then
+    # How many boxes share this group decides what the number can honestly be
+    # called. Same rule as everywhere else here: report the scope you have.
+    peers="$(printf '%s' "$boxes" | jq -r --arg gr "$grp" '
+      def as_id: if type == "object" then (.id // empty)
+                 elif type == "string" then .
+                 elif type == "number" then tostring
+                 else empty end;
+      [ .[] | select((.group // null) != null)
+            | select((if (.group | type) == "array" then (.group[0] | as_id) else (.group | as_id) end) == $gr) ]
+      | length' 2>/dev/null || echo 1)"
+    grpname="$(printf '%s' "$boxes" | jq -r --arg g "$gid" '
+      def glabel: if type == "object" then (.name // .id // "?") else tostring end;
+      first(.[] | select(.gid == $g)) | .group
+      | if type == "array" then (.[0] | glabel) else glabel end' 2>/dev/null || true)"
+    j="$(_get "${API}/trends/${what}" "group=${grp}")"
+    if [ "${peers:-1}" -le 1 ]; then
+      scope="box group ${grpname:-$grp}, which holds only this box"
+    else
+      scope="box group ${grpname:-$grp}, which holds ${peers} boxes including this one"
+    fi
+  else
+    # Two different reasons to be here, and they call for different advice: no
+    # group at all (which the user can fix), or a group field this code could
+    # not reduce to a single id (which they cannot, and should not be told to).
+    local hasgrp
+    hasgrp="$(printf '%s' "$boxes" | jq -r --arg g "$gid" '
+      first(.[] | select(.gid == $g)) | if (.group // null) == null then "no" else "yes" end' 2>/dev/null || echo no)"
+    j="$(_get "${API}/trends/${what}")"
+    if [ "$hasgrp" = yes ]; then
+      scope="the whole MSP account - this box's MSP group could not be read as a single group"
+    else
+      scope="the whole MSP account - this box is in no MSP group"
+    fi
+  fi
+
   _expect_array "$j" "${API}/trends/${what}"
+  printf 'Daily %s, covering %s.\n' "$what" "$scope"
   printf '%s' "$j" | jq -r "${JQ_FMT}"'
     sort_by(.ts) | .[] | "\(.ts | tonumber | floor | strflocaltime("%Y-%m-%d"))\t\(.value // 0)"' \
     | awk -F'\t' -v w="$what" 'BEGIN{printf "%-12s %s\n","DAY",toupper(w)} {printf "%-12s %s\n",$1,$2}'
-  echo "(account-wide: trends filter by MSP group, not by box. To get these for one"
-  echo " box, put it in an MSP group of its own, then: hh firewalla get '/v2/trends/${what}' 'group=<id>')"
+  # Only worth suggesting when there is no group at all; a box whose group could
+  # not be parsed is not something the user can fix by making another group.
+  if [ -z "$grp" ] && [ "${hasgrp:-no}" = no ]; then
+    echo "(to get these for one box, put it in an MSP group of its own - this command"
+    echo " then picks the group up on its own.)"
+  fi
 }
 
 # Account-wide by definition: every supported type RANKS boxes or regions

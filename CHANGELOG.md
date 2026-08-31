@@ -24,6 +24,40 @@ easy to get wrong and changes if a date is added to the heading.
 When adding a version, keep the three in sync: the anchor (`v1-1-0`), the git
 tag (`v1.1.0`), and `HH_VERSION` in `bin/hh` (`1.1.0`).
 
+<a id="v1-5-4"></a>
+
+## 1.5.4 (2026-08-31)
+
+### Changed
+
+- `hh firewalla trends` scopes itself to the box's MSP group. The trends
+  endpoints filter by group rather than by box, so these numbers used to be
+  account-wide with a footer explaining how to narrow them by hand. The pinned
+  box's group is now resolved from `/v2/boxes` and passed automatically, which
+  makes the figures per-box whenever that group holds only that box - the usual
+  arrangement, and no id to look up.
+
+  Every run states what it actually covers, because a group is not always one
+  box:
+
+      Daily flows, covering box group Home Site, which holds only this box.
+      Daily flows, covering box group Sites, which holds 3 boxes including this one.
+      Daily flows, covering the whole MSP account - this box is in no MSP group.
+
+  A box in no group still reads account-wide, and still gets the advice to make
+  a group of its own - after which the command finds it without help. A box
+  whose group cannot be read as a single group also reads account-wide, and says
+  that rather than claiming there is no group, since that would send someone off
+  to fix something that is not wrong.
+
+  The `group` field is thinly documented - nullable, and seen in the wild as an
+  object with an id and as a bare id string - so all of those shapes are
+  handled, plus a numeric id and a single-element array, and anything else is
+  treated as "cannot tell" rather than guessed at.
+
+  Proposed by @lesterktm, who implemented it in their fork first and identified
+  the group-shape ambiguity.
+
 <a id="v1-5-3"></a>
 
 ## 1.5.3 (2026-08-31)

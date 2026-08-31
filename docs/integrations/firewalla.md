@@ -34,15 +34,20 @@ aliases, registered with the same token, and `hh firewalla devices cabin` says
 which you want. `hh firewalla boxes` lists them all and marks the one an alias
 reads. To change which box an alias means: `hh rm-host <alias> && hh add-firewalla`.
 
-One read stays account-wide even so: `hh firewalla trends` filters by MSP
-*group* rather than by box, and its output says as much rather than passing an
-account-wide number off as one box's. If you want per-box trends, put the box in
-an MSP group of its own and read that group directly:
+One read is scoped differently: `hh firewalla trends` filters by MSP *group*
+rather than by box. It resolves the pinned box's group and passes it for you, so
+the numbers are per-box whenever that group holds only that box - the usual
+arrangement. Every run states what it actually covers on the first line:
 
-    hh firewalla get '/v2/trends/flows' 'group=<group-id>'
+    Daily flows, covering box group Home Site, which holds only this box.
+    Daily flows, covering box group Sites, which holds 3 boxes including this one.
+    Daily flows, covering the whole MSP account - this box is in no MSP group.
 
-Per-box numbers obtained that way sum back to the account-wide total. (Thanks to
-@lesterktm for testing this on a live multi-box account.)
+A group holding several boxes is not one box, so the count is named rather than
+glossed. If your box is in no group, put it in one of its own and the command
+picks it up from then on with no id to pass by hand. Per-box numbers obtained
+that way sum back to the account-wide total. (Thanks to @lesterktm for testing
+this on a live multi-box account, and for proposing the automatic scoping.)
 
 **It can only read. It cannot change anything on your network.** Note that here
 that rests on *one* lock rather than UniFi's two:
