@@ -109,14 +109,21 @@ ad-hoc query has to do the same.
 The query syntax and the full qualifier list are in
 `capabilities/firewalla.md`.
 
-## Trends are account-wide, and that is not a bug to route around
+## Trends: read the scope line before quoting a number
 
-`hh firewalla trends` filters by MSP group, not by box, so on a multi-box
-account it reports the whole account however the alias is pinned. The output
-says so. Do NOT present those numbers as one box's. If the user wants per-box
-trends, the fix is on his side: put the box in an MSP group of its own, then
-read that group with `hh firewalla get '/v2/trends/flows' 'group=<id>'`. On a
-single-box account none of this applies.
+`hh firewalla trends` filters by MSP group rather than by box, and resolves the
+pinned box's group automatically, so it is usually already per-box. It prints
+what it covers on the first line, every time:
+
+    Daily flows, covering box group Home Site, which holds only this box.
+    Daily flows, covering box group Sites, which holds 3 boxes including this one.
+    Daily flows, covering the whole MSP account - this box is in no MSP group.
+
+Read that line and repeat its scope when you report the numbers. A group with
+three boxes in it is not "your Firewalla", and an account-wide total is not
+either. If the box is in no group, the numbers are account-wide and the fix is
+the user's: put the box in an MSP group of its own, after which this command
+finds the group on its own.
 
 ## One thing to know before you use this in an outage
 
