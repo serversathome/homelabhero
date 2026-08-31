@@ -133,11 +133,18 @@ are URL-encoded for you (the MSP API requires that):
     hh firewalla get '/v2/alarms' 'query=box.id:{gid} type:8 status:active' 'limit=50'
     hh firewalla get '/v2/flows' 'query=box.id:{gid} device.name:*iphone* total:>50MB'
     hh firewalla get '/v2/rules' 'query=box.id:{gid} status:paused action:allow'
-    hh firewalla get '/v2/target-lists' 'owner=global,{gid}'
+    hh firewalla get '/v2/target-lists' 'owner=global,firewalla,{gid}'
 
 `{gid}` is substituted with the box this alias is pinned to, in the path and in
 any query value. Use it: a raw query without it is account-wide, which is the
 one thing the named ops exist to avoid.
+
+Target lists are the exception to that pattern, because they have owners rather
+than a box filter, and there are THREE owner categories: `global` (lists the MSP
+account defines), `firewalla` (the curated lists Firewalla ships - OISD, DoH
+Services, Tor Exit Nodes), and a box gid. Naming only two of them does not
+narrow the result, it DROPS the third, so an account whose lists are all
+built-ins comes back empty. Name all three.
 
 The query syntax is Firewalla's own: `qualifier:value` terms separated by
 spaces, `-` to exclude, `*` to wildcard, `>` `<` `>=` `<=` and `n-m` for
