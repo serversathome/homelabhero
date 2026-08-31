@@ -24,6 +24,38 @@ easy to get wrong and changes if a date is added to the heading.
 When adding a version, keep the three in sync: the anchor (`v1-1-0`), the git
 tag (`v1.1.0`), and `HH_VERSION` in `bin/hh` (`1.1.0`).
 
+<a id="v1-5-3"></a>
+
+## 1.5.3 (2026-08-31)
+
+Fixes a defect in the 1.3.3 baseline seeding, found reviewing it after it
+shipped.
+
+### Fixed
+
+- The shipped-file baseline no longer collects files HomelabHero does not own.
+  1.3.3 seeded it with the WHOLE `ops` tree, but the update only manages
+  `.claude/`, `capabilities/` and `CLAUDE.md`. So the user's own `infra/`,
+  `inventory/`, `runbooks/` and `hosts/` notes were copied into the baseline as
+  though they were shipped files.
+
+  Nothing was overwritten or lost by this - the sync is driven by what the repo
+  ships, not by the baseline - but `hh doctor` reads the baseline to decide
+  which files carry local edits, so filling in `infra/network.md`, exactly what
+  that file exists for, was reported as editing a shipped file. On a box whose
+  only changes were its own notes, doctor claimed two shipped files had been
+  edited.
+
+  The seed now copies only the owned paths, and every run prunes anything else
+  out of the baseline, so a box that already took 1.3.3 heals itself on its next
+  update with nothing to do by hand.
+
+  The root cause was three separate lists of what "shipped" means - one in the
+  seed, one in the sync loop, one implicit in `hh doctor`. There is now a single
+  `SHIPPED_PATHS` in the installer that the seed, the prune and the sync all
+  read, and `hh doctor` derives its answer from the pruned baseline rather than
+  a list of its own.
+
 <a id="v1-5-2"></a>
 
 ## 1.5.2 (2026-08-27)

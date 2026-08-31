@@ -56,10 +56,17 @@ Nothing is overwritten without saying so, and nothing is deleted. `hh doctor` re
 how many shipped files you have edited and whether any `.upstream` versions are
 waiting to be merged.
 
-The one exception is the first update after this behaviour shipped: with no pristine
-copy to compare against yet, an edit is indistinguishable from an old version, so the
-update lands and your previous file is saved as `<file>.bak-<timestamp>`. Every run
-after that preserves in place instead.
+The first update after this behaviour shipped is the one that has no pristine copy to
+compare against yet. The installer handles it by seeding one from the revision your box
+was already running, recovered from the checkout, so that update is exact too: untouched
+files take it silently and only your real edits are flagged. If that revision cannot be
+recovered - a re-cloned checkout, or a hand-run installer with no pull behind it - the
+update still lands and your previous file is saved as `<file>.bak-<timestamp>` first, so
+nothing is lost either way.
+
+The baseline holds only the files HomelabHero ships. Your notes under `infra/`,
+`inventory/`, `runbooks/` and `hosts/` are not in it and are not compared, so editing
+them - which is what they are for - never shows up as a modified shipped file.
 
 Even so, the best home for local additions is **`CLAUDE.local.md`**, which `CLAUDE.md`
 imports and the installer never touches. Put your name, your house rules, and pointers

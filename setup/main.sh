@@ -16,6 +16,11 @@ REG_DIR="${CFG_DIR}/hosts.d"
 # Pristine copy of the ops files HomelabHero owns, as last shipped. It is what
 # makes an update able to tell "the user edited this" from "this is simply old".
 SHIPPED_DIR="${CFG_DIR}/shipped"
+# The ops paths HomelabHero OWNS, relative to ops/. Everything else in the ops
+# tree belongs to the user and is only ever added to. Defined once, because the
+# seed, the prune and the sync must agree on it: they disagreed in 1.3.3, and
+# the baseline ended up holding the user's own notes.
+SHIPPED_PATHS=(.claude capabilities CLAUDE.md)
 NODE_LTS_MIN=22
 # Non-interactive mode. `hh update` re-runs this installer headless (weekly via
 # cron and on demand) with HH_NONINTERACTIVE=1, which skips only the two
@@ -224,21 +229,47 @@ sudo -u "$AGENT_USER" mkdir -p "$OPS_DST"
 # can recover what it needs: `git reset --hard` in hh-update sets ORIG_HEAD to
 # the revision the box was running before the pull, which is exactly the tree
 # that produced the live ops brain.
+#
+# Only the OWNED paths go in. Extract the old ops tree to a scratch directory
+# and copy those across, rather than archiving them directly: a path that did
+# not exist at that revision would make `git archive` fail outright and cost the
+# whole seed, and the baseline must not accumulate anything the sync does not
+# manage - `hh doctor` reads the baseline to decide which files carry local
+# edits, so a stray user note in there is reported as a modified shipped file.
 if [ ! -d "$SHIPPED_DIR" ] && [ -d "${REPO_ROOT}/.git" ]; then
   PREV_REV="$(git -C "$REPO_ROOT" rev-parse --verify --quiet ORIG_HEAD || true)"
   if [ -n "${PREV_REV:-}" ]; then
-    $SUDO install -d -o root -g root -m 755 "$SHIPPED_DIR"
+    SEED_TMP="$(mktemp -d)"
     if git -C "$REPO_ROOT" archive "$PREV_REV" ops 2>/dev/null \
-         | $SUDO tar -x --strip-components=1 -C "$SHIPPED_DIR" 2>/dev/null; then
+         | tar -x --strip-components=1 -C "$SEED_TMP" 2>/dev/null; then
+      $SUDO install -d -o root -g root -m 755 "$SHIPPED_DIR"
+      for rel in "${SHIPPED_PATHS[@]}"; do
+        [ -e "${SEED_TMP}/${rel}" ] && $SUDO cp -a "${SEED_TMP}/${rel}" "${SHIPPED_DIR}/"
+      done
+      $SUDO chown -R root:root "$SHIPPED_DIR"
       say "    baseline seeded from ${PREV_REV:0:7}; local edits will be preserved, not backed up"
     else
       # Not fatal - the sync just falls back to backing up whatever it replaces.
-      [ -n "$SHIPPED_DIR" ] && $SUDO rm -rf -- "$SHIPPED_DIR"
       warn "could not seed the shipped-file baseline; files this update replaces will be backed up instead"
     fi
+    rm -rf -- "$SEED_TMP"
   fi
 fi
 $SUDO install -d -o root -g root -m 755 "$SHIPPED_DIR"
+
+# Drop anything in the baseline that is not an owned path. 1.3.3 seeded the
+# WHOLE ops tree, so boxes that took that update have the user's own infra/,
+# runbooks/, inventory/ and hosts/ notes sitting in the baseline, where
+# `hh doctor` counts every edit to them as a modified shipped file. Pruning on
+# every run heals those boxes without anyone having to know it happened.
+if [ -d "$SHIPPED_DIR" ]; then
+  while IFS= read -r stray; do
+    [ -n "$stray" ] || continue
+    keep=0
+    for rel in "${SHIPPED_PATHS[@]}"; do [ "$stray" = "$rel" ] && keep=1; done
+    [ "$keep" -eq 1 ] || $SUDO rm -rf -- "${SHIPPED_DIR:?}/${stray}"
+  done < <(cd "$SHIPPED_DIR" 2>/dev/null && ls -A 2>/dev/null || true)
+fi
 
 # Two halves to the ops tree, and `hh update` re-runs this installer weekly, so
 # what happens here to an edited file happens every week.
@@ -306,10 +337,14 @@ sync_shipped() {
   $SUDO install -D -m 644 "$src" "$old"
 }
 
+# One loop over the owned paths, so a path added to SHIPPED_PATHS is picked up
+# by the seed, the prune and the sync together. `find` on a plain file yields
+# that file, so CLAUDE.md needs no special case.
 while IFS= read -r f; do
   sync_shipped "$f" "${f#"${REPO_ROOT}/ops/"}"
-done < <(find "${REPO_ROOT}/ops/.claude" "${REPO_ROOT}/ops/capabilities" -type f | sort)
-sync_shipped "${REPO_ROOT}/ops/CLAUDE.md" "CLAUDE.md"
+done < <(for rel in "${SHIPPED_PATHS[@]}"; do
+           find "${REPO_ROOT}/ops/${rel}" -type f 2>/dev/null
+         done | sort)
 
 # Everything else: add-only, exactly as before.
 $SUDO rsync -a --ignore-existing "${REPO_ROOT}/ops/" "${OPS_DST}/"
