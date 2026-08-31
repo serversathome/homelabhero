@@ -29,9 +29,21 @@ tag (`v1.1.0`), and `HH_VERSION` in `bin/hh` (`1.1.0`).
 ## 1.5.3 (2026-08-31)
 
 Fixes a defect in the 1.3.3 baseline seeding, found reviewing it after it
-shipped.
+shipped, and a Firewalla target-list bug found against a real MSP account.
 
 ### Fixed
+
+- `hh firewalla lists` was filtering out Firewalla's built-in target lists. The
+  query named two of the three owner categories (`global`, `firewalla`, box
+  gid), so an account whose lists are all built-ins returned nothing; it now
+  asks for all three, and reads list size from `.count` since built-ins do not
+  inline `targets`. The same two-owner query was also taught as the raw
+  escape-hatch example in `capabilities/firewalla.md`, where it was wrong
+  independently of the broker, and is corrected there too.
+
+  Reported, fixed and verified live by @lesterktm, on an account whose 13 target
+  lists are all built-ins: the table went from zero rows to all 13 with their
+  real sizes.
 
 - The shipped-file baseline no longer collects files HomelabHero does not own.
   1.3.3 seeded it with the WHOLE `ops` tree, but the update only manages
