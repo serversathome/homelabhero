@@ -421,15 +421,23 @@ op_rules() {
                   {printf "%-8s %-8s %-12s %-34s %-26s %s\n",$1,$2,$3,$4,$5,$6}'
 }
 
-# Target lists have owners rather than a box filter: a list belongs either to
-# the MSP ("global", shared by every box) or to one box. Ask for both, so a
-# pinned alias shows the lists that actually apply to it and not another site's.
+# Target lists have owners rather than a box filter, and there are THREE owner
+# categories, not two:
+#   global    - lists the MSP account itself defines
+#   firewalla - the curated lists Firewalla ships (OISD, DoH Services, Tor Exit
+#               Nodes, ...), owned by neither the MSP nor a box
+#   <gid>     - lists owned by one specific box
+# The endpoint default is global+firewalla and silently omits box-owned lists,
+# so naming only "global,<gid>" does not narrow it - it drops every built-in
+# list, which on an account whose lists are all built-ins empties the table.
+# All three are named so a pinned alias sees every list that applies to it, and
+# not another box's.
 op_lists() {
   local gid j; gid="$(_gid)"
-  j="$(_get "${API}/target-lists" "owner=global,${gid}")"
+  j="$(_get "${API}/target-lists" "owner=global,firewalla,${gid}")"
   _expect_array "$j" "${API}/target-lists"
   printf '%s' "$j" | jq -r "${JQ_FMT}"'
-    .[] | "\(.name // "?")\t\(.id // "-")\t\(.owner // "-")\t\(.category // "-")\t\((.targets // []) | length)\t\(.lastUpdated | when)"' \
+    .[] | "\(.name // "?")\t\(.id // "-")\t\(.owner // "-")\t\(.category // "-")\t\(.count // ((.targets // []) | length))\t\(.lastUpdated | when)"' \
     | awk -F'\t' 'BEGIN{printf "%-28s %-40s %-10s %-10s %8s %-12s\n","NAME","ID","OWNER","CATEGORY","TARGETS","UPDATED"}
                   {printf "%-28s %-40s %-10s %-10s %8s %-12s\n",$1,$2,$3,$4,$5,$6}'
 }
