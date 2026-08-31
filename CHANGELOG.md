@@ -24,6 +24,58 @@ easy to get wrong and changes if a date is added to the heading.
 When adding a version, keep the three in sync: the anchor (`v1-1-0`), the git
 tag (`v1.1.0`), and `HH_VERSION` in `bin/hh` (`1.1.0`).
 
+<a id="v1-5-5"></a>
+
+## 1.5.5 (2026-08-31)
+
+A full audit of every script, prompted by three bugs in a row that shipped
+looking correct. Five real defects, all reproduced before being fixed.
+
+### Fixed
+
+- `hh unifi` no longer reports a broken console as an empty one. `_site` was
+  called inline in the request path - `_get ".../sites/$(_site)/devices"` - and
+  `die` inside a command substitution ends only that subshell, so a failure to
+  resolve the site printed its reason and then issued a SECOND request with an
+  empty site anyway. With a rejected API key that answered exit 0 and an empty
+  device table, which reads as "nothing is adopted" rather than "your key does
+  not work"; with no sites it answered a 404 whose advice ("needs Network 9.0
+  or newer") had nothing to do with the actual problem. The site is now resolved
+  into a variable first, so the failure propagates and the first message is the
+  only one.
+
+  This is the same defect the Firewalla broker had and 1.3.x fixed. Every other
+  broker was checked for it; UniFi was the last one carrying it.
+
+- `hh unifi` no longer picks a site when a console has several. It took the
+  first and cached it into the registry, so a console with a site per location
+  reported one of them as though it were the network, with nothing saying which.
+  That is exactly the bug reported against Firewalla in #30. An alias is now
+  pinned to one site at registration - `hh add-unifi` asks when there is more
+  than one - and an entry that predates the pin refuses and lists the sites
+  rather than guessing. Single-site consoles are unaffected and still resolve
+  silently.
+
+- `hh run` against a NetBird or Cloudflare alias named the wrong platform and
+  called it read-only. All three token platforms register with `AUTH=token`, and
+  the refusal keyed on that rather than on `PLATFORM`, so it always said
+  "Firewalla ... It is read-only". Both of those are wrong for NetBird and
+  Cloudflare, and a false read-only assurance is the kind of thing an agent
+  repeats to a user. Each platform now gets its own message, naming what it can
+  actually do.
+
+- Bash completion knows the NetBird and Cloudflare commands. It was never
+  updated when they were added, so `hh netbird <TAB>` offered nothing and the
+  subcommand list stopped at the older feature set.
+
+- An empty response body no longer prints a second, emptier error under the real
+  one. `_expect_data` reported `unexpected response from <path>:` with nothing
+  after the colon, directly beneath the message explaining what had gone wrong.
+
+### Changed
+
+- Removed a duplicated comment block in `hh-netbird` left by an earlier edit.
+
 <a id="v1-5-4"></a>
 
 ## 1.5.4 (2026-08-31)

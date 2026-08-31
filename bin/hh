@@ -12,7 +12,7 @@
 #
 set -euo pipefail
 
-HH_VERSION="1.5.4"
+HH_VERSION="1.5.5"
 REG_DIR="/etc/homelabhero/hosts.d"
 VAULT_DIR="/etc/homelabhero/vault"
 # Pristine copy of the ops files HomelabHero ships, as last delivered. Diffing
@@ -934,9 +934,7 @@ EOF
 
   echo >/dev/tty; echo "Registered '${alias}'. Testing..." >/dev/tty
   if cmd_test "$alias"; then
-    # Resolve and cache the site id so the first real command is not slower
-    # than every one after it.
-    unifi_broker sites "$alias" >/dev/null 2>&1 || true
+    _pin_unifi_site "$alias"
     echo >/dev/tty
     unifi_broker summary "$alias" 2>&1 | sed 's/^/  /' >/dev/tty || true
   else
@@ -1300,6 +1298,53 @@ cmd_add_netbird() {
 cmd_add_cloudflare() {
   [ "$(id -u)" -eq 0 ] || sudo -v || die "add-cloudflare needs sudo (run from an admin shell, not the Claude UI)"
   cmd_add_host --platform cloudflare "$@"
+}
+
+# Pin the alias to ONE site.
+#
+# A console can host several (a site per location is a normal UniFi
+# arrangement), and every read is against one of them. Resolving it here also
+# means the first real command is not slower than every one after it.
+#
+# One site needs no question asked. More than one is a real choice and only the
+# operator can make it - the broker refuses to guess, so this is the path that
+# refusal points at, and it has to actually lead somewhere.
+_pin_unifi_site() {
+  local alias="$1" j n site sname pick
+  echo >/dev/tty; echo "Reading the sites on this console..." >/dev/tty
+  if ! j="$(unifi_broker get "$alias" '/proxy/network/integration/v1/sites' 2>/dev/null)" \
+     || ! printf '%s' "$j" | jq -e 'has("data")' >/dev/null 2>&1; then
+    echo "  (could not read the site list; it will be resolved on first use)" >/dev/tty
+    return 0
+  fi
+  n="$(printf '%s' "$j" | jq -r '(.data // []) | length')"
+  case "$n" in
+    0) echo "  This console reports no sites." >/dev/tty; return 0 ;;
+    1) site="$(printf '%s' "$j" | jq -r '(.data // [])[0].id // empty')"
+       sname="$(printf '%s' "$j" | jq -r '(.data // [])[0].internalReference // "default"')"
+       echo "  One site on this console: $(printf '%s' "$j" | jq -r '(.data // [])[0].name // "?"')" >/dev/tty ;;
+    *) cat >/dev/tty <<EOF
+
+  This console has ${n} sites. An alias reads exactly one of them, so pick which
+  one '${alias}' means. (Register the others as their own aliases with another
+  'hh add-unifi' run, using the same key.)
+
+EOF
+       printf '%s' "$j" | jq -r '(.data // []) | to_entries[] |
+         "  \(.key + 1)) \(.value.name // "?")  (\(.value.internalReference // "-"))  \(.value.id // "?")"' >/dev/tty
+       echo >/dev/tty
+       while :; do
+         pick="$(ask "Which site is '${alias}'? (1-${n})" 1)"
+         [[ "$pick" =~ ^[0-9]+$ ]] && [ "$pick" -ge 1 ] && [ "$pick" -le "$n" ] && break
+         echo "  Enter a number between 1 and ${n}." >/dev/tty
+       done
+       site="$(printf '%s' "$j" | jq -r --argjson i "$((pick-1))" '(.data // [])[$i].id // empty')"
+       sname="$(printf '%s' "$j" | jq -r --argjson i "$((pick-1))" '(.data // [])[$i].internalReference // "default"')"
+       echo "  '${alias}' now means: $(printf '%s' "$j" | jq -r --argjson i "$((pick-1))" '(.data // [])[$i].name // "?"')" >/dev/tty ;;
+  esac
+  [ -n "$site" ] || { echo "  (the console returned no site id; skipping the pin)" >/dev/tty; return 0; }
+  sudo sed -i '/^SITE=/d;/^SITE_NAME=/d' "${REG_DIR}/${alias}.conf"
+  printf 'SITE=%s\nSITE_NAME=%s\n' "$site" "$sname" | sudo tee -a "${REG_DIR}/${alias}.conf" >/dev/null
 }
 
 cmd_add_unifi() {

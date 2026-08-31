@@ -180,6 +180,10 @@ _get() {
 # because those two look identical to a reader and only one of them is true.
 _expect_data() {
   printf '%s' "$1" | jq -e 'has("data")' >/dev/null 2>&1 && return 0
+  # An empty body means the request itself already failed and said why. Repeating
+  # "unexpected response: " with nothing after it adds a second, emptier error
+  # under the real one and buries it.
+  [ -n "$1" ] || die "no response from ${2} (the request above failed)"
   die "unexpected response from ${2}: $(printf '%s' "$1" | tr -d '\n' | cut -c1-160)"
 }
 
@@ -215,15 +219,37 @@ _remember() {
   return 0
 }
 
+# CALL THIS IN A STANDALONE ASSIGNMENT, never inline in another command's
+# arguments. die() runs exit, and an exit inside a command substitution ends
+# only THAT subshell - so `_get ".../sites/$(_site)/devices"` printed the
+# refusal and then issued a second request with an empty site anyway, reporting
+# whatever that returned. With a rejected API key it answered exit 0 and an
+# empty table, which reads as "no devices adopted" rather than "your key does
+# not work". Resolve into a variable first and the failure propagates.
 _site() {
   if [ -z "$SITE" ]; then
-    local j; j="$(_get "${IV1}/sites")"
+    local j n
+    j="$(_get "${IV1}/sites")"
     _expect_data "$j" "${IV1}/sites"
-    SITE="$(printf '%s' "$j" | jq -r '(.data // [])[0].id // empty')"
-    [ -n "$SITE" ] || die "the console returned no sites"
-    SITE_NAME="$(printf '%s' "$j" | jq -r '(.data // [])[0].internalReference // "default"')"
-    _remember SITE "$SITE"
-    _remember SITE_NAME "$SITE_NAME"
+    n="$(printf '%s' "$j" | jq -r '(.data // []) | length')"
+    case "$n" in
+      0) die "the console returned no sites" ;;
+      1) SITE="$(printf '%s' "$j" | jq -r '(.data // [])[0].id // empty')"
+         [ -n "$SITE" ] || die "the console returned a site with no id"
+         SITE_NAME="$(printf '%s' "$j" | jq -r '(.data // [])[0].internalReference // "default"')"
+         _remember SITE "$SITE"
+         _remember SITE_NAME "$SITE_NAME" ;;
+      # More than one site, and nothing recorded which this alias means. Picking
+      # the first is what the Firewalla broker used to do across boxes, and it
+      # reported another site's network as this one's. Refuse instead.
+      *) die "'${ALIAS}' is not pinned to a site, and this console has ${n} of them.
+    Every read here would silently report one of them, so this refuses rather
+    than guess which. Re-register it and pick, from an admin shell:
+        hh rm-host ${ALIAS}
+        hh add-unifi
+    Sites on this console:
+$(printf '%s' "$j" | jq -r '(.data // [])[] | "        \(.name // "?")  (\(.internalReference // "-"))  \(.id // "?")"')" ;;
+    esac
   fi
   printf '%s' "$SITE"
 }
@@ -232,7 +258,8 @@ _site() {
 # ops are usable without the caller having to know either identifier.
 _expand() {
   local p="$1"
-  case "$p" in *'{site}'*) p="${p//\{site\}/$(_site)}" ;; esac
+  local s
+  case "$p" in *'{site}'*) s="$(_site)"; p="${p//\{site\}/$s}" ;; esac
   case "$p" in *'{siteName}'*) _site >/dev/null; p="${p//\{siteName\}/$SITE_NAME}" ;; esac
   printf '%s' "$p"
 }
@@ -266,7 +293,8 @@ op_sites() {
 }
 
 op_devices() {
-  local j; j="$(_get "${IV1}/sites/$(_site)/devices?limit=200")"
+  local site j; site="$(_site)"
+  j="$(_get "${IV1}/sites/${site}/devices?limit=200")"
   _expect_data "$j" "devices"
   printf '%s' "$j" | jq -r '(.data // [])[] |
       "\(.name // "?")\t\(.model // "?")\t\(.state // "?")\t\(.ipAddress // "-")\t\(.firmwareVersion // "-")\t\(if .firmwareUpdatable then "update available" else "" end)"' \
@@ -276,16 +304,19 @@ op_devices() {
 
 op_device() {
   [ "$#" -ge 1 ] || die "usage: hh unifi device [alias] <deviceId>"
-  _get "${IV1}/sites/$(_site)/devices/$1"
+  local site; site="$(_site)"
+  _get "${IV1}/sites/${site}/devices/$1"
 }
 
 op_stats() {
   [ "$#" -ge 1 ] || die "usage: hh unifi stats [alias] <deviceId>"
-  _get "${IV1}/sites/$(_site)/devices/$1/statistics/latest"
+  local site; site="$(_site)"
+  _get "${IV1}/sites/${site}/devices/$1/statistics/latest"
 }
 
 op_clients() {
-  local j; j="$(_get "${IV1}/sites/$(_site)/clients?limit=200")"
+  local site j; site="$(_site)"
+  j="$(_get "${IV1}/sites/${site}/clients?limit=200")"
   _expect_data "$j" "clients"
   printf '%s' "$j" | jq -r '(.data // [])[] |
       "\(.name // .hostname // "?")\t\(.ipAddress // "-")\t\(.macAddress // "-")\t\(.type // "-")\t\(.connectedAt // "-")"' \
@@ -294,7 +325,8 @@ op_clients() {
 }
 
 op_networks() {
-  local j; j="$(_get "${IV1}/sites/$(_site)/networks")"
+  local site j; site="$(_site)"
+  j="$(_get "${IV1}/sites/${site}/networks")"
   _expect_data "$j" "networks"
   printf '%s' "$j" | jq -r '(.data // [])[] | "\(.name // "?")\t\(.vlanId // "-")\t\(.subnet // .ipSubnet // "-")"' \
     | awk -F'\t' 'BEGIN{printf "%-24s %-8s %s\n","NETWORK","VLAN","SUBNET"} {printf "%-24s %-8s %s\n",$1,$2,$3}'

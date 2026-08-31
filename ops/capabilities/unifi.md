@@ -23,6 +23,9 @@ result by reading it back. See the unifi-ops skill.
 - Subsystem health (WAN, internet, LAN, WiFi): `hh unifi health`
 - Console and Network application version: `hh unifi info`
 - Sites on the console (usually one): `hh unifi sites`
+- An alias reads exactly ONE site, pinned at registration. A console with
+  several sites asks which at `hh add-unifi` time, and refuses to guess if the
+  entry predates that. `hh unifi sites` lists them all.
 - Reachability check: `hh unifi ping`
 
 ## Devices (gateway, switches, access points)

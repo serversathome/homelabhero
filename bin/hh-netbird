@@ -101,8 +101,6 @@ for a in "$@"; do
 done
 set -- ${ARGS[@]+"${ARGS[@]}"}
 # The command as typed, minus the flag, so a refusal can print the exact line to
-# run again rather than describing it.
-# The command as typed, minus the flag, so a refusal can print the exact line to
 # run again rather than describing it. Each argument is requoted: ${ARGS[*]}
 # joins on spaces, so a value that CONTAINS one - "my new name" - would be
 # printed as three arguments and the retry would not reproduce the command it
