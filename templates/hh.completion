@@ -4,7 +4,7 @@
 _hh() {
   local cur sub subs aliases
   cur="${COMP_WORDS[COMP_CWORD]}"
-  subs="list run test overview inventory diff scan unifi firewalla doctor provision add-host add-unifi add-firewalla repin rm-host update login audit version help"
+  subs="list run test overview inventory diff scan unifi firewalla netbird cloudflare cf doctor provision add-host add-unifi add-firewalla add-netbird add-cloudflare repin rm-host update login audit version help"
 
   if [ "$COMP_CWORD" -eq 1 ]; then
     mapfile -t COMPREPLY < <(compgen -W "$subs" -- "$cur")
@@ -30,6 +30,27 @@ _hh() {
       elif [ "$COMP_CWORD" -eq 3 ]; then
         aliases="$(cd /etc/homelabhero/hosts.d 2>/dev/null && \
           for f in *.conf; do [ -e "$f" ] && grep -q '^AUTH=apikey' "$f" && printf '%s\n' "${f%.conf}"; done)"
+        mapfile -t COMPREPLY < <(compgen -W "$aliases" -- "$cur")
+      fi
+      ;;
+    netbird)
+      # Read ops first, then the ones that change the mesh. All of the write ops
+      # refuse without --force and print the exact retry line, so completing
+      # them is not the same as arming them.
+      if [ "$COMP_CWORD" -eq 2 ]; then
+        mapfile -t COMPREPLY < <(compgen -W "summary ping info peers peer groups networks routers resources policies policy-show dns keys posture proxies services service domains events traffic get rename approve ssh expiration group-add group-rm policy-enable policy-disable key-create key-revoke rm-peer rm-policy rm-group" -- "$cur")
+      elif [ "$COMP_CWORD" -eq 3 ]; then
+        aliases="$(cd /etc/homelabhero/hosts.d 2>/dev/null && \
+          for f in *.conf; do [ -e "$f" ] && grep -q '^PLATFORM=netbird' "$f" && printf '%s\n' "${f%.conf}"; done)"
+        mapfile -t COMPREPLY < <(compgen -W "$aliases" -- "$cur")
+      fi
+      ;;
+    cloudflare|cf)
+      if [ "$COMP_CWORD" -eq 2 ]; then
+        mapfile -t COMPREPLY < <(compgen -W "summary ping info account zones records dns tunnels tunnel-show access-apps get dns-set dns-proxy dns-delete tunnel-route tunnel-unroute purge access-revoke" -- "$cur")
+      elif [ "$COMP_CWORD" -eq 3 ]; then
+        aliases="$(cd /etc/homelabhero/hosts.d 2>/dev/null && \
+          for f in *.conf; do [ -e "$f" ] && grep -q '^PLATFORM=cloudflare' "$f" && printf '%s\n' "${f%.conf}"; done)"
         mapfile -t COMPREPLY < <(compgen -W "$aliases" -- "$cur")
       fi
       ;;
