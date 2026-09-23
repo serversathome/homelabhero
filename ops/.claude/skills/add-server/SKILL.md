@@ -20,8 +20,10 @@ target themselves.
 ## Steps
 
 1. Gather from the user: a short alias (e.g. `pve1`), the IP or hostname, and the
-   platform (`linux`, `truenas`, or `proxmox`). Assume SSH port 22 and connect as
-   **root** unless they say otherwise. Confirm briefly.
+   platform (`linux`, `truenas`, `proxmox`, or `routeros` for a MikroTik).
+   Assume SSH port 22 and connect as **root** unless they say otherwise
+   (`routeros` defaults to **admin**, since RouterOS has no root). Confirm
+   briefly.
 
    Root is the default and needs no sudo. Only ask for a different connect user if
    the box requires one (e.g. a TrueNAS where root SSH is off, using
@@ -46,6 +48,10 @@ target themselves.
      Keys" -> paste -> Save (and enable root SSH if you registered as root).
    - Proxmox: add the line to `/root/.ssh/authorized_keys` on the node.
    - Linux: append it to `~/.ssh/authorized_keys` for that login user.
+   - MikroTik RouterOS: upload it to the device as a file (WinBox/WebFig Files,
+     or scp), then run `/user ssh-keys import public-key-file=<file> user=<user>`
+     in the RouterOS terminal. For a read-only link, put that user in the `read`
+     group.
 
 4. Once they confirm it's installed, verify:
 

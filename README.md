@@ -26,13 +26,13 @@
 Turn a fresh LXC into an AI homelab command center. One command installs Claude
 Code plus the claudecodeui web front end, preloaded with context and
 troubleshooting skills, and wires up a credential broker so Claude can operate
-your TrueNAS, Proxmox, and Linux machines over SSH without ever seeing a single
-credential.
+your TrueNAS, Proxmox, Linux and MikroTik machines over SSH without ever seeing a
+single credential.
 
 - A control-plane LXC that reaches everything else. It runs the UI and the agent;
   the workloads stay on your real machines.
 - Claude connects only through `hh run <alias> "<command>"`. Same command for
-  TrueNAS, Proxmox, and any Linux host, all reached as a normal shell over SSH.
+  TrueNAS, Proxmox, any Linux host, and MikroTik RouterOS, all reached over SSH.
 - Credentials never touch the LLM, and cannot: they live in a vault the agent
   user has no permission to read.
 

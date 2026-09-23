@@ -30,21 +30,22 @@ ALIAS="$1"; HOST="$2"; PORT="${3:-22}"; PLAT="${4:-linux}"; RUSER="${5:-}"
 case "$HOST" in *@*) RUSER="${HOST%@*}"; HOST="${HOST#*@}" ;; esac
 
 # No user specified anywhere: default to root (needs no sudo on the target).
-[ -n "$RUSER" ] || RUSER="root"
+# RouterOS has no root; its stock login is admin.
+if [ -z "$RUSER" ]; then [ "$PLAT" = "routeros" ] && RUSER="admin" || RUSER="root"; fi
 
 [[ "$ALIAS" =~ $NAME_RE ]] || die "invalid alias"
 [[ "$HOST"  =~ $HOST_RE ]] || die "invalid host"
 [[ "$RUSER" =~ $NAME_RE ]] || die "invalid user"
 [[ "$PORT"  =~ ^[0-9]+$  ]] || die "invalid port"
 case "$PLAT" in
-  linux|truenas|proxmox) : ;;
+  linux|truenas|proxmox|routeros) : ;;
   # A UniFi console is registered with an API key, and a key is a secret being
   # typed. Same rule as password auth: it must not pass through a chat session,
   # so there is deliberately no path to it from here.
   unifi) die "a UniFi console is registered with an API key, which cannot be handled
     safely from the chat. Ask the operator to run this in an admin shell:
         hh add-unifi" ;;
-  *) die "platform must be linux, truenas, or proxmox (a UniFi console uses hh add-unifi)" ;;
+  *) die "platform must be linux, truenas, proxmox, or routeros (a UniFi console uses hh add-unifi)" ;;
 esac
 [ -e "${REG_DIR}/${ALIAS}.conf" ] && die "alias '${ALIAS}' already registered"
 

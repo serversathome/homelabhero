@@ -12,7 +12,7 @@
 #
 set -euo pipefail
 
-HH_VERSION="1.5.5"
+HH_VERSION="1.6.0"
 REG_DIR="/etc/homelabhero/hosts.d"
 VAULT_DIR="/etc/homelabhero/vault"
 # Pristine copy of the ops files HomelabHero ships, as last delivered. Diffing
@@ -82,8 +82,8 @@ HomelabHero
   hh provision <alias> <host> [port] [platform] [user]
                                register a host with a generated key (key-only,
                                no password); prints the public key to install.
-                               user defaults per platform (truenas ->
-                               truenas_admin, else root); or pass user@host
+                               user defaults per platform (routeros -> admin,
+                               else root); or pass user@host
 
   hh add-host                  register a host (operator, needs sudo)
   hh add-unifi                 register a UniFi router/console with a View Only
@@ -114,6 +114,14 @@ EOF
 # a non-root admin that has passwordless sudo. midclt talks to the middleware and
 # never needs sudo, so it is not prefixed.
 VITALS_NIX="uptime -p 2>/dev/null || uptime; free -h | grep -i '^Mem'; df -h / | tail -1"
+# RouterOS takes SSH but is not a POSIX shell: `true`, `echo`, `uptime` and
+# `sudo` are all "bad command name" there, which is what used to make a healthy
+# MikroTik read as UNREACHABLE in every sweep. Its own CLI is used instead, and
+# nothing here is prefixed - RouterOS has no sudo; what a login may do is its
+# /user group (read, write, full). The port line lists only ports that are
+# enabled but have no link, so a healthy switch prints nothing there.
+VITALS_ROS=':put [/system identity get name]; /system resource print; /system health print; :put "# ports enabled but down:"; /interface print terse where !running and !disabled'
+_inv_routeros() { echo ':put "# Interfaces"; /interface print; :put ""; :put "# Bridge ports"; /interface bridge port print; :put ""; :put "# Bridge VLANs"; /interface bridge vlan print'; }
 _inv_proxmox() { local p="$1"; echo "echo '# VMs'; ${p}qm list; echo; echo '# LXCs'; ${p}pct list; echo; echo '# Storage'; ${p}pvesm status"; }
 # Compact tables for the TrueNAS middleware queries, so they read like the
 # Proxmox qm/pct output instead of a wall of JSON.
@@ -392,7 +400,7 @@ cmd_test() {
     else echo "FAIL: $1 not reachable"; printf '%s\n' "$out" | sed 's/^/  /'; return 1; fi
     return 0
   fi
-  if broker "$1" 'echo homelabhero-ok' 2>/dev/null | grep -q homelabhero-ok; then
+  if _alive "$1"; then
     echo "OK: $1 reachable"
   else
     echo "FAIL: $1 not reachable (check registration, key authorization, mesh)"; return 1
@@ -400,6 +408,11 @@ cmd_test() {
 }
 
 _platform_of() { conf_get "${REG_DIR}/$1.conf" PLATFORM; }
+
+# The liveness probe has to be a command the far end understands, or a device
+# that answers `hh run` perfectly well is reported as down.
+_probe_cmd() { case "$(_platform_of "$1")" in routeros) echo ':put homelabhero-ok' ;; *) echo 'echo homelabhero-ok' ;; esac; }
+_alive() { broker "$1" "$(_probe_cmd "$1")" 2>/dev/null | grep -q homelabhero-ok; }
 
 cmd_overview() {
   shopt -s nullglob
@@ -420,7 +433,11 @@ cmd_overview() {
       else echo "  UNREACHABLE"; fi
       continue
     fi
-    if ! broker "$a" 'true' 2>/dev/null; then echo "  UNREACHABLE"; continue; fi
+    if ! _alive "$a"; then echo "  UNREACHABLE"; continue; fi
+    if [ "$plat" = "routeros" ]; then
+      broker "$a" "$VITALS_ROS" 2>/dev/null | sed 's/^/  /' || true
+      continue
+    fi
     broker "$a" "$VITALS_NIX" 2>/dev/null | sed 's/^/  /' || true
     [ "$plat" = "truenas" ] && { echo -n "  zpool: "; broker "$a" "$(_priv "$a")zpool status -x" 2>/dev/null; }
   done
@@ -441,7 +458,8 @@ _inventory_one() {
     uout="$(api_broker "$a" "$(_api_detail_op "$a")" 2>/dev/null)" && printf '%s\n' "$uout"
     return
   fi
-  if ! broker "$a" 'true' 2>/dev/null; then echo "UNREACHABLE"; return; fi
+  if ! _alive "$a"; then echo "UNREACHABLE"; return; fi
+  if [ "$plat" = "routeros" ]; then broker "$a" "$(_inv_routeros)" 2>/dev/null || true; return; fi
   local p; p="$(_priv "$a")"
   case "$plat" in
     proxmox) broker "$a" "$(_inv_proxmox "$p")" 2>/dev/null || true ;;
@@ -655,7 +673,7 @@ EOF
       # Firewalla is deliberately not on this list. It is read through its MSP
       # domain, which is not an address on this network, so there is nothing a
       # scan could register - see the hint printed after the loop.
-      plat="$(ask "Platform for ${ip} (linux/truenas/proxmox/unifi)" "$plat")"
+      plat="$(ask "Platform for ${ip} (linux/truenas/proxmox/routeros/unifi)" "$plat")"
       echo; echo "Registering ${ip} as ${plat} ..."
       case "$plat" in
         unifi)     cmd_add_host --host "$ip" --port 443 --platform unifi ;;
@@ -775,7 +793,22 @@ cmd_doctor() {
       fi
       continue
     fi
-    if ! broker "$a" 'echo ok' 2>/dev/null | grep -q ok; then bad "cannot reach ${a}"; continue; fi
+    if ! _alive "$a"; then bad "cannot reach ${a}"; continue; fi
+    # RouterOS has no sudo. What the login may do is its /user group, and that
+    # is worth saying out loud: a `read` group is a real second lock (the device
+    # itself refuses writes), while `full` means hh run can change anything,
+    # including the config that carries this box's own path to the switch.
+    if [ "$(_platform_of "$a")" = "routeros" ]; then
+      local grp; grp="$(broker "$a" "/user print terse where name=\"${u}\"" 2>/dev/null \
+        | grep -o 'group=[^ ]*' | head -1 | cut -d= -f2 || true)"
+      case "$grp" in
+        read)  ok "reach ${a} (${u}, RouterOS group read - the device refuses writes)" ;;
+        "")    ok "reach ${a} (${u}, RouterOS - could not read its /user group)" ;;
+        *)     ok "reach ${a} (${u}, RouterOS group ${grp})"
+               note "${a} logs in with group ${grp}: hh run can change its config. A 'read' group user makes it read-only at the device." ;;
+      esac
+      continue
+    fi
     if [ "$u" = "root" ] || broker "$a" 'sudo -n true' >/dev/null 2>&1; then ok "reach ${a} (${u})"
     else
       note "reach ${a} (${u}) - no passwordless sudo: raw root tools (docker, zpool, smartctl) will not run (midclt still works)."
@@ -794,6 +827,18 @@ cmd_doctor() {
 
 # ---- operator ---------------------------------------------------------------
 
+# How to authorize a vault key on RouterOS (ops/capabilities/routeros.md and the
+# add-server skill say the same thing).
+_routeros_key_steps() {
+  cat <<EOF
+RouterOS keeps SSH keys per user, so ssh-copy-id does not apply. On the device:
+  1. Upload the public key above to the device as homelabhero.pub
+     (WinBox/WebFig: Files -> Upload, or scp it there)
+  2. /user ssh-keys import public-key-file=homelabhero.pub user=$1
+Tip: for a read-only link, make $1 a member of the 'read' group.
+EOF
+}
+
 cmd_add_host() {
   local alias="" host="" port="" plat="" ruser="" auth="" cred=""
   while [ "$#" -gt 0 ]; do case "$1" in
@@ -807,8 +852,8 @@ cmd_add_host() {
   [ "$(id -u)" -eq 0 ] || sudo -v || die "add-host needs sudo (run from an admin shell, not the Claude UI)"
   # Platform is settled before the alias so a UniFi console can suggest a
   # sensible name and then skip every SSH question, which does not apply to it.
-  [ -n "$plat" ] || plat="$(ask 'Platform (linux/truenas/proxmox/unifi/firewalla/netbird/cloudflare)' linux)"
-  case "$plat" in linux|truenas|proxmox|unifi|firewalla|netbird|cloudflare) : ;; *) die "unknown platform: ${plat} (linux, truenas, proxmox, unifi, firewalla, netbird, cloudflare)" ;; esac
+  [ -n "$plat" ] || plat="$(ask 'Platform (linux/truenas/proxmox/routeros/unifi/firewalla/netbird/cloudflare)' linux)"
+  case "$plat" in linux|truenas|proxmox|routeros|unifi|firewalla|netbird|cloudflare) : ;; *) die "unknown platform: ${plat} (linux, truenas, proxmox, routeros, unifi, firewalla, netbird, cloudflare)" ;; esac
   if [ -z "$alias" ]; then
     case "$plat" in
       unifi|firewalla) alias="$(ask 'Alias (short name for your router)' router)" ;;
@@ -837,7 +882,8 @@ cmd_add_host() {
   [ -n "$host" ] || host="$(ask 'IP or hostname')"
   if [ "$plat" = "unifi" ]; then _add_unifi_host "$alias" "$host" "${port:-443}"; return; fi
   [ -n "$port" ] || port="$(ask 'SSH port' 22)"
-  ruser="$(ask 'Username' root)"
+  # RouterOS has no root; its stock login is admin.
+  if [ "$plat" = "routeros" ]; then ruser="$(ask 'Username' admin)"; else ruser="$(ask 'Username' root)"; fi
   auth="$(ask 'Auth method (key recommended / password)' key)"
 
   case "$auth" in
@@ -847,7 +893,11 @@ cmd_add_host() {
       sudo -u "$VAULT_USER" ssh-keygen -t ed25519 -N '' -q -f "${VAULT_DIR}/${cred}" -C "homelabhero-${alias}"
       echo >/dev/tty; echo "Public key to authorize on ${host}:" >/dev/tty
       sudo cat "${VAULT_DIR}/${cred}.pub" >/dev/tty; echo >/dev/tty
-      if [ "$(ask 'Install it now via ssh-copy-id? (needs the remote password once) (y/N)' N)" = "y" ]; then
+      if [ "$plat" = "routeros" ]; then
+        # ssh-copy-id cannot work here: RouterOS keeps keys per /user, not in an
+        # authorized_keys file, so it has to be imported on the device.
+        _routeros_key_steps "$ruser" >/dev/tty
+      elif [ "$(ask 'Install it now via ssh-copy-id? (needs the remote password once) (y/N)' N)" = "y" ]; then
         sudo -u "$VAULT_USER" ssh-copy-id -i "${VAULT_DIR}/${cred}.pub" -p "$port" "${ruser}@${host}" </dev/tty || \
           echo "ssh-copy-id did not complete; authorize the key manually." >/dev/tty
       fi

@@ -26,7 +26,8 @@ Every `hh` subcommand. The per-integration ops have their own pages under
     hh doctor                    check the whole setup is healthy
     hh provision <alias> <host> [port] [platform] [user]
                                  register a host with a generated key (UI-safe);
-                                 connects as root by default (pass a user to override)
+                                 connects as root by default, admin on routeros
+                                 (pass a user to override)
 
     hh add-host                  register a host (operator)
     hh add-unifi                 register your UniFi router with an API key (operator)

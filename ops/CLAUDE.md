@@ -30,6 +30,13 @@ through a broker that holds the credentials for you:
 hh run works the same for every host: TrueNAS, Proxmox, and any Linux box are all
 reached as a normal shell over SSH.
 
+One exception to "normal shell": platform `routeros` (a MikroTik switch or
+router) is reached over SSH too, but speaks the RouterOS CLI, not bash - use
+`/interface print`, not `ip link`. Treat it with the same care as the router:
+its failure can take away the path you would use to fix it, and unlike UniFi and
+Firewalla nothing in the broker stops a write. `capabilities/routeros.md` covers
+both.
+
 ## Four things are reached over an API, not a shell
 
 These are reached over an HTTP API rather than SSH, so `hh run` does not work on
@@ -86,7 +93,7 @@ up believing a command will stop you when it will not:
    and anything destructive REFUSES without `--force`. The refusal is real and
    happens in the broker, not in your judgement.
 3. **Can do anything, fenced only by convention and by the permission prompt** -
-   `hh run` on a shell host (Proxmox, TrueNAS, Linux). `hh run <alias> "qm
+   `hh run` on a shell host (Proxmox, TrueNAS, Linux, RouterOS). `hh run <alias> "qm
    destroy 100"` is a normal command. Nothing in the broker inspects it, and the
    "(confirm)" marks in the capability catalogs are instructions to YOU, not
    enforcement. The only mechanical gate is that `hh run` is not pre-approved,
@@ -179,6 +186,7 @@ Read the relevant one so you use the whole toolset, not just the basics:
 @capabilities/proxmox.md
 @capabilities/truenas.md
 @capabilities/linux.md
+@capabilities/routeros.md
 @capabilities/unifi.md
 @capabilities/firewalla.md
 @capabilities/netbird.md
