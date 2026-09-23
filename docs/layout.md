@@ -25,7 +25,8 @@ Where everything lives on disk, what differs per platform, and what to back up.
     └── ops/                       becomes ~hhagent/homelab-ops (git-backed)
         ├── CLAUDE.md              always-loaded context + house rules
         ├── capabilities/          per-platform capability catalogs
-        │                          (proxmox, truenas, linux, unifi, firewalla)
+        │                          (proxmox, truenas, linux, routeros, unifi,
+        │                           firewalla, netbird, cloudflare)
         ├── infra/                 environment-specific references
         ├── inventory/             saved inventory snapshots
         ├── runbooks/              resolved incidents accumulate here
@@ -52,6 +53,13 @@ Where everything lives on disk, what differs per platform, and what to back up.
   Inventory queries both namespaces, so VMs and LXCs are listed on any of them
   with nothing to configure. On 26, which is still beta, LXC containers may not
   be listed yet if they sit under a namespace neither of those covers.
+- MikroTik RouterOS (platform `routeros`): SSH like the three above, but the far
+  end is the RouterOS CLI, not a shell, so `hh overview`, `hh inventory`,
+  `hh test` and `hh doctor` use RouterOS commands for it. Connects as `admin` by
+  default. `ssh-copy-id` does not work on RouterOS; import the key with
+  `/user ssh-keys import`. There is no sudo - what the login may do is its
+  `/user` group, and `hh doctor` reports it. Writes go through `hh run`
+  unfenced, so a `read` group user is the way to make it read-only.
 - UniFi: API key, read-only, never SSH. A UniFi console is registered with
   `hh add-unifi` and reached with `hh unifi <op>`; `hh run` refuses it and says
   so. Needs UniFi OS (UDM, UCG, UDR, Cloud Key Gen2+, UniFi OS Server) on

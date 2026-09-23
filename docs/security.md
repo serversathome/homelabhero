@@ -52,8 +52,9 @@ you type never pass through an LLM-driven session.
 
 
 
-- Full platform capability catalogs (`ops/capabilities/`) for Proxmox, TrueNAS, and
-  Linux, so Claude uses the whole toolset of each system, not just the basics.
+- Full platform capability catalogs (`ops/capabilities/`) for Proxmox, TrueNAS,
+  Linux, and MikroTik RouterOS, so Claude uses the whole toolset of each system,
+  not just the basics.
 - Live inventory via `hh inventory`: Proxmox VMs and LXCs, TrueNAS VMs, LXCs,
   apps and pools, and Docker containers wherever they run. `hh inventory --save`
   snapshots into `ops/inventory/` so state changes show up in git over time.
@@ -68,11 +69,17 @@ exactly where the machinery helps least. Three tiers:
 |---|---|---|
 | **cannot write at all** | UniFi, Firewalla | the broker has no code path that issues anything but a GET. There is no verb to reach. |
 | **can write, structurally fenced** | NetBird, Cloudflare | named operations only, each with a method and path hardcoded in the broker; anything destructive refuses without `--force` |
-| **can do anything** | `hh run` on a shell host | the permission prompt, and the `(confirm)` marks in the capability catalogs - which are instructions to the model, not enforcement |
+| **can do anything** | `hh run` on a shell host (Proxmox, TrueNAS, Linux, MikroTik RouterOS) | the permission prompt, and the `(confirm)` marks in the capability catalogs - which are instructions to the model, not enforcement |
 
 `hh run pve1 "qm destroy 100"` is an ordinary command. Nothing inspects it. The
 only mechanical gate is that `hh run` is not pre-approved, so you see and approve
 the command string before it runs.
+
+A MikroTik switch sits in this tier too, even though it is the kind of device
+UniFi and Firewalla are read-only to protect. The device can supply the missing
+lock itself: register it with a user in RouterOS's `read` group and RouterOS
+refuses writes whatever the agent runs. `hh doctor` reports which group the login
+has.
 
 ### What the fences on NetBird and Cloudflare actually are
 

@@ -24,6 +24,43 @@ easy to get wrong and changes if a date is added to the heading.
 When adding a version, keep the three in sync: the anchor (`v1-1-0`), the git
 tag (`v1.1.0`), and `HH_VERSION` in `bin/hh` (`1.1.0`).
 
+<a id="v1-6-0"></a>
+
+## 1.6.0 (2026-09-23)
+
+MikroTik RouterOS is a platform in its own right, so a MikroTik switch no longer
+has to be registered as `linux` and then misread by every sweep.
+([#45](https://github.com/serversathome/homelabhero/issues/45))
+
+### Added
+
+- Platform `routeros`, accepted by `hh add-host`, `hh provision` and the
+  `hh scan --add` picker. It is reached with `hh run` over SSH like any other
+  host; the connection broker is unchanged.
+- `hh overview` shows RouterOS vitals: identity, `/system resource`,
+  `/system health`, and any port that is enabled but has no link.
+- `hh inventory` shows interfaces, bridge ports and the bridge VLAN table.
+- `hh doctor` reports the login's RouterOS `/user` group, and says plainly when
+  it is not `read`, since then `hh run` can change the switch's config.
+- `ops/capabilities/routeros.md`, a capability catalog in the same style as the
+  others, including why RouterOS safe-mode does not protect `hh run`.
+- `hh add-host` defaults the RouterOS user to `admin` and prints the
+  `/user ssh-keys import` steps instead of offering `ssh-copy-id`, which cannot
+  work against RouterOS.
+
+### Fixed
+
+- The liveness probe in `hh overview` and `hh inventory` ran `true`, which
+  RouterOS rejects as a bad command name, so a MikroTik that answered `hh run`
+  fine was reported UNREACHABLE. `hh test` and `hh doctor` had the same problem
+  with `echo`. All four now use one probe that suits the platform.
+
+### Not included
+
+A fenced `hh routeros` broker with named writes. UniFi and Firewalla are
+read-only because a router's failure takes away the access needed to fix it,
+and a switch carrying storage and cluster traffic is the same kind of device.
+
 <a id="v1-5-5"></a>
 
 ## 1.5.5 (2026-08-31)

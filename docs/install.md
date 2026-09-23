@@ -93,8 +93,8 @@ key instead of SSH. This is the router integration below.
 You do not have to shell in to add machines. Just ask Claude in the browser, e.g.
 "add my TrueNAS at 10.0.0.20". Claude runs `hh provision`, which registers the
 host and generates a keypair in the vault, then hands you the public key to paste
-into the target's admin UI (TrueNAS user SSH keys, Proxmox authorized_keys, or a
-Linux authorized_keys). No password ever passes through the chat, and the agent
-never sees the private key. `hh test <alias>` confirms it once the key is
+into the target's admin UI (TrueNAS user SSH keys, Proxmox authorized_keys, a
+Linux authorized_keys, or a MikroTik's `/user ssh-keys import`). No password
+ever passes through the chat, and the agent never sees the private key. `hh test <alias>` confirms it once the key is
 installed. Password-based onboarding stays in the shell-only `hh add-host` for an
 admin, since a password can't be handled safely in an LLM session.
