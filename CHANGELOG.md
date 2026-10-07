@@ -33,6 +33,41 @@ unfinished. No command changes its signature.
 
 ### Fixed
 
+- The weekly auto-update was aborting the installer partway through, every
+  week, on every box. Debian cron starts a job with `PATH=/usr/bin:/bin`, and
+  the sudoers step calls `visudo`, which lives in `/usr/sbin`; under cron that
+  was "command not found", reported as "sudoers template failed validation",
+  and the installer stopped there. The CLI binaries, installed in the step
+  before, did update; the ops brain, Node, claude and the service unit did
+  not. `hh update` from a shell goes through sudo's `secure_path`, which has
+  `/usr/sbin`, so it worked, and the failure sat in
+  `/var/log/homelabhero-update.log` where nothing surfaced it. Both
+  `hh-update` and the installer now append the sbin directories to `PATH`,
+  the cron template sets a full one for new installs, and the installer says
+  "visudo not found" when that is what happened. `hh doctor` (below) now also
+  reports an installer error from the last run, so a repeat of this cannot be
+  silent.
+
+  To check whether a box was affected:
+
+      grep -c "sudoers template failed" /var/log/homelabhero-update.log*
+
+  Every fix shipped as "heals itself on the next weekly update" since the
+  weekly job began - the three-way sync for edited files (1.3.1), the baseline
+  seeding and prune (1.3.3, 1.5.3), preferring a native claude (1.3.0) - took
+  effect only on boxes where someone ran `hh update` or the installer by hand.
+  The first cron run after this update does what that manual run would have:
+  the service restarts, and a box with no baseline yet keeps the previous copy
+  of any edited shipped file as `<file>.bak-<stamp>`, as the 1.3.1 notes
+  describe.
+- `hh netbird proxies`, `services`, `service` and `domains` softened EVERY
+  failure to "Bring Your Own Proxy is not available on this NetBird", exit 0,
+  and `hh netbird traffic` did the same with "not available on this account".
+  A rejected token, a timeout, a rate limit and a TLS pin mismatch all got the
+  same reassuring line. Only a 404 means a server without BYOP, so only a 404
+  gets that message now (a 402, 403 or 404 for `traffic`, since a plan limit
+  can answer either way); everything else fails with the broker's usual
+  message and exit 2, as every other op does.
 - `hh unifi device` and `hh unifi stats` validate the device id before splicing
   it into a URL. The `get` op already checked its whole path; these two took
   the id as given, so an id containing a slash or a query string reached a
@@ -81,6 +116,13 @@ unfinished. No command changes its signature.
   the running service is never pulled out from under itself.
 - The nvm installer is pinned to v0.40.8 (was v0.40.1). This only affects a
   fresh install; a box that already has nvm keeps it.
+
+### Removed
+
+- The installer no longer deletes `/usr/local/bin/hh-upgrade`. That binary
+  was retired before 1.0.0, so no box installed from a release ever had it.
+  The 1.5.3 baseline prune stays: it heals boxes that took 1.3.3 by hand, and
+  given the cron fault above, some of those have not run an update since.
 
 <a id="v1-6-0"></a>
 

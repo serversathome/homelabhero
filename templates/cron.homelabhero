@@ -7,5 +7,9 @@
 # The five time fields are: minute hour day-of-month month day-of-week.
 # Default below = every Sunday at 04:00. Edit the line to change the schedule,
 # or delete this file to turn auto-update off entirely.
+#
+# cron starts jobs with PATH=/usr/bin:/bin, which has no visudo or useradd;
+# hh-update sets its own PATH as well, so this line is belt and braces.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 0 4 * * 0 root /usr/local/bin/hh-update >> /var/log/homelabhero-update.log 2>&1

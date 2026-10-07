@@ -14,6 +14,14 @@
 #
 set -uo pipefail
 export DEBIAN_FRONTEND=noninteractive
+# Debian cron starts a job with PATH=/usr/bin:/bin unless the crontab says
+# otherwise, and the installer this re-runs needs visudo, which lives in
+# /usr/sbin. Under that PATH the sudoers step died with "sudoers template
+# failed validation", every week, and nothing after it ran - skills, Node,
+# claude, the service unit - while `hh update` from a shell (sudo's
+# secure_path has /usr/sbin) worked, which is why it went unnoticed. The sbin
+# directories are appended, not prepended, so a caller's own PATH still wins.
+export PATH="${PATH}:/usr/local/sbin:/usr/sbin:/sbin"
 
 CFG_DIR="/etc/homelabhero"
 INSTALL_CONF="${CFG_DIR}/install.conf"
