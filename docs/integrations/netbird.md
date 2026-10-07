@@ -5,8 +5,8 @@
 ## Your NetBird mesh (read, and write if you let it)
 
 
-The mesh is how the command center reaches hosts wherever they are, and until
-now HomelabHero could only see it from inside one peer:
+The mesh is how the command center reaches hosts wherever they are. Without
+this integration, HomelabHero can only see it from inside one peer:
 
     hh run <alias> "netbird status"
 

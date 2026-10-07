@@ -2,13 +2,20 @@
 
 [← back to the README](../README.md)
 
+Where to start depends on what you are doing. Installing a box for the first
+time: [install.md](install.md), top to bottom. Running one day to day: the
+[command reference](commands.md) and [updating and health](updating.md). Deciding
+whether to trust it with your credentials and your router: the
+[security model](security.md). Something broke: [troubleshooting](troubleshooting.md).
+
 | | |
 |---|---|
-| [Installing and adding machines](install.md) | first install, discovery, registering hosts |
+| [Installing and adding machines](install.md) | first install, the web UI port and exposure, discovery, registering hosts |
 | [Command reference](commands.md) | every `hh` subcommand |
 | [The security model](security.md) | credential isolation, what the agent knows, how strongly each integration is fenced |
 | [Updating and health](updating.md) | `hh update`, the weekly job, `hh doctor` |
-| [Layout, platforms, persistence](layout.md) | where things live, per-platform notes, what to back up |
+| [Troubleshooting](troubleshooting.md) | every `hh doctor` line, and the known install and runtime failures with their fixes |
+| [Layout, platforms, persistence](layout.md) | where things live, per-platform notes, what to back up, moving to a new LXC, uninstalling |
 
 ## Integrations
 

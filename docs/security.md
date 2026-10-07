@@ -50,7 +50,7 @@ rule in the ops brain. Two layers, both kept.
 Register hosts from a real admin shell (not the Claude web terminal) so the secrets
 you type never pass through an LLM-driven session.
 
-
+## What Claude knows
 
 - Full platform capability catalogs (`ops/capabilities/`) for Proxmox, TrueNAS,
   Linux, MikroTik RouterOS, UniFi, Firewalla, NetBird and Cloudflare, so Claude

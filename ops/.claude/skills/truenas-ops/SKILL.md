@@ -88,12 +88,13 @@ matching API. `midclt` runs over the local socket, so the REST API removal in
 - 25.04 / 25.10: Incus for containers AND VMs, `virt.instance.*`
   (`type` = CONTAINER or VM). Instance disks live in the hidden `.ix-virt`
   dataset. `virt.global.config` shows the instances pool.
-- 26 (beta): Incus removed, libvirt runs QEMU/KVM VMs (`vm.*`) and libvirt_lxc
+- 27 (pre-release; its betas were numbered 26): Incus removed, libvirt runs
+  QEMU/KVM VMs (`vm.*`) and libvirt_lxc
   containers (own namespace). Upgrades migrate `.ix-virt` zvols to libvirt VMs;
   expect orphaned LXCs and VMs missing from the UI (zvols usually survive under
   `.ix-virt`).
 
 See "Virtualization" in capabilities/truenas.md for the full command set. When a
-method name is unclear (common on 26), use the truenas-middleware skill to list
+method name is unclear (common on 27), use the truenas-middleware skill to list
 the live `vm.*` / `virt.*` / `container.*` methods and read their schemas instead
 of guessing. Confirm before any start/stop/create/update/delete.

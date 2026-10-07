@@ -83,10 +83,11 @@ What the installer puts outside the ops brain, and who owns it:
   TrueNAS you can connect as `truenas_admin` instead (pass it to `hh provision`);
   `midclt` reaches the middleware and covers most TrueNAS work regardless.
 - TrueNAS changed its VM engine twice (libvirt through 24.10, Incus on 25.04 and
-  25.10, back to libvirt on 26), and the middleware method names moved with it.
-  Inventory queries both namespaces, so VMs and LXCs are listed on any of them
-  with nothing to configure. On 26, which is still beta, LXC containers may not
-  be listed yet if they sit under a namespace neither of those covers.
+  25.10, back to libvirt on 27, whose betas were numbered 26), and the middleware
+  method names moved with it. Inventory queries both namespaces, so VMs and LXCs
+  are listed on any of them with nothing to configure. On 27, a release
+  candidate as of October 2026, LXC containers may not be listed yet if they sit
+  under a namespace neither of those covers.
 - MikroTik RouterOS (platform `routeros`): SSH like the three above, but the far
   end is the RouterOS CLI, not a shell, so `hh overview`, `hh inventory`,
   `hh test` and `hh doctor` use RouterOS commands for it. Connects as `admin` by
@@ -123,3 +124,60 @@ keys are stored unencrypted (they have to be, for non-interactive automation).
 Their safety rests on the `hhvault` user boundary, which a raw filesystem copy
 bypasses, so treat those backups as secret material: keep them somewhere only you
 can reach, exactly as you would the private keys themselves.
+
+## Moving to a new LXC
+
+Three things are worth carrying over: the registry and vault (so every host
+keeps trusting the keys it already has), your ops notes, and Claude's sign-in.
+Everything else is reproduced by the installer.
+
+On the old box, as root:
+
+    tar -C / -czf /root/homelabhero-move.tgz \
+      etc/homelabhero \
+      home/hhagent/homelab-ops \
+      home/hhagent/.claude
+
+That archive contains the vault, so move it the way you would move a private
+key, and delete it when you are done.
+
+On the new box: run the install one-liner, skip the sign-in and add-servers
+steps, then restore with ownership reasserted (the two users may not have the
+same numeric ids on the new box):
+
+    systemctl stop homelab-cc
+    tar -C / -xzf homelabhero-move.tgz
+    chown -R hhvault:hhvault /etc/homelabhero/hosts.d /etc/homelabhero/vault
+    chown root:root /etc/homelabhero/install.conf /etc/homelabhero/cloudcli.env
+    chown -R hhagent:hhagent /home/hhagent/homelab-ops /home/hhagent/.claude
+    hh update
+    hh doctor
+
+`hh update` re-runs the installer, which rewrites `install.conf` for the new
+checkout and restarts the service; `hh doctor` then reaches every host with the
+keys you brought. Two things are not in the archive and are simply made again:
+the web UI login (create it on first visit) and `hhvault`'s SSH `known_hosts`,
+which the broker re-learns on first contact with each host.
+
+## Uninstalling
+
+The installer puts files in a fixed set of places (see
+[On an installed box](#on-an-installed-box)), so removal is a short list. Stop
+the service and remove the pieces, as root:
+
+    systemctl disable --now homelab-cc
+    rm -f /etc/systemd/system/homelab-cc.service && systemctl daemon-reload
+    rm -f /etc/sudoers.d/homelabhero /etc/cron.d/homelabhero \
+          /etc/logrotate.d/homelabhero /etc/bash_completion.d/hh
+    rm -f /usr/local/bin/hh /usr/local/bin/hh-*
+    rm -rf /etc/homelabhero          # the registry AND the vault: the keys are gone after this
+    rm -f /var/log/homelabhero-*.log*
+    userdel -r hhagent               # removes ~hhagent: the ops brain, Node, Claude, its sign-in
+    userdel -r hhvault
+    rm -rf ~/.homelabhero            # the git checkout the installer ran from
+
+The hosts you registered still carry the vault's public keys in their
+`authorized_keys` (or RouterOS `/user ssh-keys`), under the comment
+`homelabhero-<alias>`. Remove those on each host to finish; the private halves
+were deleted with the vault, so they cannot be used, but there is no reason to
+leave them.

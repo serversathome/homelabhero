@@ -8,17 +8,21 @@
 
 
 > [!WARNING]
-> **Installed or last updated HomelabHero before July 18, 2026? Re-run the installer once.**
+> **Relying on the weekly auto-update? Run `hh update` once by hand.**
 >
-> A newer version of npm began blocking package install scripts, which broke the native modules HomelabHero depends on (`better-sqlite3`, `node-pty`, `bcrypt`). On affected boxes, Claude Code installed but would not start, or the web UI and terminal failed to load. 
+> Before 1.6.1 the weekly job aborted the installer partway through (a cron
+> `PATH` problem, explained in the
+> [changelog](CHANGELOG.md#v1-6-1)), so a box that nobody has run `hh update`
+> or the installer on since July has current `hh` commands but stale skills,
+> Node and Claude. One manual run fixes it for good:
 > ```bash
-> apt update && apt install -y curl && \
-> curl -fsSL https://raw.githubusercontent.com/serversathome/homelabhero/main/install.sh | bash
+> hh update
 > ```
->
-> This is a reinstall, not a reconfigure. It is safe and idempotent: your users, credentials, and registered servers are preserved, and your `hh list` stays exactly as-is. Nothing gets wiped.
->
-> At **Step 10 (adding servers)**, skip it. Your servers are already registered and skipping breaks nothing. Same for the Claude sign-in step if you are already signed in.
+> A box installed before July 18, 2026 that has never been re-run by hand
+> should use the install one-liner below instead; it enables self-update too.
+> Either way it is a reinstall, not a reconfigure: users, credentials and
+> registered servers are preserved and `hh list` stays exactly as-is. Skip
+> step 10 (adding servers) and the Claude sign-in step if already signed in.
 
 
 # HomelabHero
@@ -94,7 +98,8 @@ The whole model, including what is *not* protected:
 | [Command reference](docs/commands.md) | every `hh` subcommand |
 | [The security model](docs/security.md) | credential isolation, what the agent knows, how strongly each integration is fenced |
 | [Updating and health](docs/updating.md) | `hh update`, the weekly job, `hh doctor` |
-| [Layout, platforms, persistence](docs/layout.md) | where things live, per-platform notes, what to back up |
+| [Troubleshooting](docs/troubleshooting.md) | every `hh doctor` line, and the known install and runtime failures with their fixes |
+| [Layout, platforms, persistence](docs/layout.md) | where things live, per-platform notes, what to back up, moving to a new LXC, uninstalling |
 | [Integrations](docs/README.md) | [UniFi](docs/integrations/unifi.md) · [Firewalla](docs/integrations/firewalla.md) · [NetBird](docs/integrations/netbird.md) · [Cloudflare](docs/integrations/cloudflare.md) |
 | [CHANGELOG](CHANGELOG.md) | what changed, per release |
 | [SECURITY](SECURITY.md) | reporting a vulnerability |
