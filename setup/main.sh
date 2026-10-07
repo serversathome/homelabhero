@@ -399,7 +399,7 @@ say "7/10  Node (nvm) + Claude Code + claudecodeui, as ${AGENT_USER}"
 sudo -u "$AGENT_USER" -i bash <<'AGENT'
 set -e
 export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] || curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+[ -s "$NVM_DIR/nvm.sh" ] || curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.8/install.sh | bash
 . "$NVM_DIR/nvm.sh"
 nvm install --lts
 nvm alias default 'lts/*'
@@ -513,6 +513,28 @@ $SUDO systemctl enable homelab-cc.service >/dev/null 2>&1 || true
 # it must pick up the new unit, Node, and cloudcli/claude. On a fresh install this
 # simply starts it. This is why hh-update no longer restarts separately.
 $SUDO systemctl restart homelab-cc.service
+
+# Every run does `nvm install --lts`, and nvm keeps every version it ever
+# installed, so a box collects one Node tree per LTS bump - each a few hundred
+# MB with its own copy of the global packages - and nothing ever uses the old
+# ones again. The unit written above pins the service to NODE_BIN and the
+# restart just moved it there, so every other version is now unreferenced and
+# can go. Done AFTER the restart on purpose: until then the running service may
+# still be executing out of one of them.
+KEEP_NODE="$(basename "$(dirname "$NODE_BIN")")"   # NODE_BIN is .../node/vX.Y.Z/bin
+case "$KEEP_NODE" in
+  v[0-9]*)
+    for d in "${AGENT_HOME}/.nvm/versions/node"/v*; do
+      [ -d "$d" ] || continue
+      v="$(basename "$d")"
+      [ "$v" = "$KEEP_NODE" ] && continue
+      if nvm_run "nvm uninstall '${v}'" >/dev/null 2>&1; then
+        say "    removed unused Node ${v} (the service runs on ${KEEP_NODE})"
+      else
+        warn "could not remove unused Node ${v} under ${d}; harmless, it only costs disk space"
+      fi
+    done ;;
+esac
 
 # ---------------------------------------------------------------------------
 echo

@@ -53,8 +53,8 @@ you type never pass through an LLM-driven session.
 
 
 - Full platform capability catalogs (`ops/capabilities/`) for Proxmox, TrueNAS,
-  Linux, and MikroTik RouterOS, so Claude uses the whole toolset of each system,
-  not just the basics.
+  Linux, MikroTik RouterOS, UniFi, Firewalla, NetBird and Cloudflare, so Claude
+  uses the whole toolset of each system, not just the basics.
 - Live inventory via `hh inventory`: Proxmox VMs and LXCs, TrueNAS VMs, LXCs,
   apps and pools, and Docker containers wherever they run. `hh inventory --save`
   snapshots into `ops/inventory/` so state changes show up in git over time.

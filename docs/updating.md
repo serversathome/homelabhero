@@ -31,7 +31,9 @@ nobody has to re-run the installer by hand.
 
 Because it re-runs the real installer, there is no "some changes only the installer can
 apply" gap - `hh update` **is** the installer, plus the OS pass. Node tracks the latest
-LTS automatically each week.
+LTS automatically each week, and once the service has been restarted onto the current
+one, any older Node versions nvm still holds are removed: nothing references them, and
+each is a few hundred MB.
 
 What it will and will not touch is deliberate:
 
@@ -71,7 +73,9 @@ them - which is what they are for - never shows up as a modified shipped file.
 Even so, the best home for local additions is **`CLAUDE.local.md`**, which `CLAUDE.md`
 imports and the installer never touches. Put your name, your house rules, and pointers
 to your own docs there and there is nothing to merge, ever. The ops brain is also a git
-repo, so `git -C ~hhagent/homelab-ops diff` still shows what an update changed.
+repo: the installer commits it once, at first install, so `git -C ~hhagent/homelab-ops diff`
+shows everything that has changed since then, updates and your own edits alike. Commit
+it yourself after an update if you want per-update diffs.
 
 Because an update can occasionally break something, `hh doctor` checks the whole
 chain in one pass: the users, the broker, vault permissions, the service, Claude's

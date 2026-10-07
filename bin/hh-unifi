@@ -273,6 +273,21 @@ _check_path() {
   case "$p" in *..*) die "path may not contain '..'" ;; esac
 }
 
+# A device id is one path segment in a URL this broker builds itself. The
+# `get` op validates the whole path above, but `device` and `stats` splice the
+# caller's id straight into one, so an id with a slash or a query string
+# would reach a different endpoint than the one named. UniFi ids are opaque
+# strings - a UUID, or a 24-hex MAC-derived id - and never contain any of
+# these, so refusing them costs nothing legitimate.
+_check_id() {
+  local id="$1"
+  [ -n "$id" ] || die "device id may not be empty"
+  case "$id" in
+    *[!A-Za-z0-9._:-]*) die "invalid device id (got: ${id})" ;;
+    *..*) die "device id may not contain '..'" ;;
+  esac
+}
+
 # ---------------------------------------------------------------------------
 # Ops
 
@@ -304,12 +319,14 @@ op_devices() {
 
 op_device() {
   [ "$#" -ge 1 ] || die "usage: hh unifi device [alias] <deviceId>"
+  _check_id "$1"
   local site; site="$(_site)"
   _get "${IV1}/sites/${site}/devices/$1"
 }
 
 op_stats() {
   [ "$#" -ge 1 ] || die "usage: hh unifi stats [alias] <deviceId>"
+  _check_id "$1"
   local site; site="$(_site)"
   _get "${IV1}/sites/${site}/devices/$1/statistics/latest"
 }

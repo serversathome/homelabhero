@@ -7,7 +7,7 @@ description: >
   Radarr, Sonarr, Prowlarr, Seerr, Immich, Seafile, SearXNG, or similar, and
   whenever the symptom is app-level: a container is down, restarting, unhealthy,
   downloads are stalled, requests are not processing, or a service is
-  unreachable while its host is fine. Trigger this even if he just names an app
+  unreachable while its host is fine. Trigger this even if the operator just names an app
   and says it is broken.
 ---
 

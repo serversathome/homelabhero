@@ -29,10 +29,11 @@ Three OS users provide the boundary:
 - `hhvault`: owns every credential (`/etc/homelabhero/vault`, mode 700)
 
 `hhagent` cannot read anything `hhvault` owns and, via a single narrow sudoers
-rule, may run **only** the two broker helpers (`hh-connect`, `hh-provision`) and
-**only** as `hhvault`. The broker reads the key or password, opens the SSH
-connection, and returns output; credential material never enters the agent's
-context. The broker validates the alias, refuses loopback targets, and confirms
+rule, may run **only** the six broker helpers (`hh-connect`, `hh-provision`,
+`hh-unifi`, `hh-firewalla`, `hh-netbird`, `hh-cloudflare`) and **only** as
+`hhvault`. The SSH broker reads the key or password, opens the connection, and
+returns output; the API brokers read a token from the vault and call the
+vendor API with it. Credential material never enters the agent's context. The broker validates the alias, refuses loopback targets, and confirms
 the credential path lives inside the vault.
 
 Every brokered command and every provisioning event is written to

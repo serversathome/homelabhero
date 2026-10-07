@@ -24,6 +24,64 @@ easy to get wrong and changes if a date is added to the heading.
 When adding a version, keep the three in sync: the anchor (`v1-1-0`), the git
 tag (`v1.1.0`), and `HH_VERSION` in `bin/hh` (`1.1.0`).
 
+<a id="v1-6-1"></a>
+
+## 1.6.1 (2026-10-07)
+
+A pass over the repository for anything stale, contradictory or quietly
+unfinished. No command changes its signature.
+
+### Fixed
+
+- `hh unifi device` and `hh unifi stats` validate the device id before splicing
+  it into a URL. The `get` op already checked its whole path; these two took
+  the id as given, so an id containing a slash or a query string reached a
+  different endpoint than the one named. UniFi ids are opaque strings with none
+  of those characters, so nothing legitimate is refused.
+- The Cloudflare broker's "no Access application matches" message pointed at
+  `hh cloudflare access`, the pre-1.4.0 name. It now names `access-apps`, the
+  op that is documented and allow-listed (the old name still works when typed).
+- `hh rm-host` checks for sudo up front like every other operator command,
+  instead of failing partway through.
+- `SECURITY.md` said the agent may run "the two broker helpers". The sudoers
+  rule has granted six since the API brokers arrived, and `docs/security.md`
+  already said so; both now agree.
+- `docs/layout.md` described "two read-only router APIs" and listed the skills
+  as of 1.3.0, omitting `netbird-ops` and `cloudflare-ops`. It also promised
+  "where everything lives on disk" and then showed only the repository tree;
+  it now lists what the installer puts under `/etc`, `/var/log` and
+  `~hhagent`, and who owns each piece.
+- `docs/security.md` named four capability catalogs; there are eight.
+- `docs/commands.md` lacked `hh inventory --save`, `hh scan --add`, the `hh cf`
+  alias, and what `--force` does. `docs/updating.md` claimed `git diff` on the
+  ops brain shows what an update changed; the installer commits only at first
+  install, so the diff is cumulative, and the page says so.
+- `ops/hosts/README.md` documented six registry keys. Entries for API hosts
+  also carry `PIN`, `WRITE`, `SITE`/`SITE_NAME`, `GID`/`BOX` and `ACCOUNT`,
+  which the skills rely on, so they are listed.
+- `CLAUDE.md` described the `hh list` columns as "alias, platform, ip, port,
+  user" and then depended on the `ACCESS` column it left out.
+- Five shipped skills referred to the operator as "he". They say "the
+  operator" now, the same personalisation fix that kept a name out of them.
+- The Firewalla docs page lists the Purple SE, as the capability catalog did.
+
+### Changed
+
+- `hh doctor` checks the weekly auto-update job itself, not just the last log
+  line: it reports a missing `/etc/cron.d/homelabhero`, a last run more than
+  ten days old, and any `[error]` the installer logged during the last run,
+  which until now was visible only to someone who opened the log. It reads the
+  rotated log when logrotate has just truncated the live one.
+- The installer removes Node versions nothing uses. Every weekly run does
+  `nvm install --lts` and nvm keeps every version it ever installed, so a box
+  collected one Node tree per LTS bump, each a few hundred MB with its own copy
+  of the global packages. After the service has been restarted onto the
+  current version, every other one under `~hhagent/.nvm/versions/node` is
+  uninstalled. The order matters and is deliberate: the restart comes first, so
+  the running service is never pulled out from under itself.
+- The nvm installer is pinned to v0.40.8 (was v0.40.1). This only affects a
+  fresh install; a box that already has nvm keeps it.
+
 <a id="v1-6-0"></a>
 
 ## 1.6.0 (2026-09-23)

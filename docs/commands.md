@@ -13,8 +13,10 @@ Every `hh` subcommand. The per-integration ops have their own pages under
     hh test <alias>              connectivity check
     hh overview                  read-only vitals sweep across all hosts
     hh inventory [alias]         what is RUNNING (VMs, LXCs, containers, apps)
+                                 add --save to snapshot into inventory/
     hh diff [alias]              inventory drift vs the last saved snapshot
     hh scan [cidr]               discover live hosts (and your router) on the network
+                                 add --add to pick and register them (operator)
     hh unifi <op> [alias]        read your UniFi router: summary, health, devices,
                                  clients, networks (READ-ONLY)
     hh firewalla <op> [alias]    read your Firewalla: summary, devices, alarms,
@@ -22,7 +24,7 @@ Every `hh` subcommand. The per-integration ops have their own pages under
     hh netbird <op> [alias]      read and manage your NetBird mesh: peers, groups,
                                  policies, routers, DNS, keys
     hh cloudflare <op> [alias]   read and manage Cloudflare: DNS records, tunnels,
-                                 Access apps
+                                 Access apps (alias: hh cf)
     hh doctor                    check the whole setup is healthy
     hh provision <alias> <host> [port] [platform] [user]
                                  register a host with a generated key (UI-safe);
@@ -52,4 +54,6 @@ The four API integrations each have their own set of ops, and their own page:
 - [Cloudflare](integrations/cloudflare.md) - reads, and writes with an Edit token
 
 `hh netbird` and `hh cloudflare` will list their own ops if you run them with no
-arguments, and both refuse destructive operations without `--force`.
+arguments, and both refuse destructive operations without `--force`: the refusal
+prints the exact command to re-run, with `--force` added, so nothing destructive
+ever happens on the first try.

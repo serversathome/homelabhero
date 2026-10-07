@@ -12,7 +12,7 @@
 #
 set -euo pipefail
 
-HH_VERSION="1.6.0"
+HH_VERSION="1.6.1"
 REG_DIR="/etc/homelabhero/hosts.d"
 VAULT_DIR="/etc/homelabhero/vault"
 # Pristine copy of the ops files HomelabHero ships, as last delivered. Diffing
@@ -817,8 +817,36 @@ cmd_doctor() {
   done
 
   echo "Auto-update"
-  if [ -f "$UPDATE_LOG" ]; then ok "last update log: $(tail -1 "$UPDATE_LOG" 2>/dev/null | cut -c1-70)"
-  else note "no update has run yet (${UPDATE_LOG} not present)"; fi
+  # The weekly job is the only thing that keeps a box current without anyone
+  # remembering to. Its absence, a run that is long overdue, or an installer
+  # step that failed inside the last run are each worth a line here: the log
+  # alone only shows them to someone who already thought to read it.
+  if [ -f /etc/cron.d/homelabhero ]; then
+    if grep -qE '^[[:space:]]*[0-9*]' /etc/cron.d/homelabhero 2>/dev/null; then ok "weekly auto-update job installed (/etc/cron.d/homelabhero)"
+    else note "/etc/cron.d/homelabhero has no schedule line; auto-update is off (run: hh update, or restore the file)"; fi
+  else
+    note "no weekly auto-update job (/etc/cron.d/homelabhero missing; run: hh update to reinstall it)"
+  fi
+  # logrotate truncates the live log weekly, so right after a rotation the
+  # last run is in the .1 file; read that rather than reporting "never ran".
+  local ulog="$UPDATE_LOG"
+  [ -s "$ulog" ] || { [ -s "${UPDATE_LOG}.1" ] && ulog="${UPDATE_LOG}.1"; }
+  if [ -s "$ulog" ]; then
+    local last_line last_block age_days
+    last_line="$(tail -1 "$ulog" 2>/dev/null | cut -c1-70)"
+    # Only the most recent run matters: everything after its final "starting" banner.
+    last_block="$(tac "$ulog" 2>/dev/null | sed '/HomelabHero update starting/q' | tac)"
+    age_days=$(( ( $(date +%s) - $(stat -c %Y "$ulog" 2>/dev/null || date +%s) ) / 86400 ))
+    if printf '%s\n' "$last_block" | grep -q '^\[error\]'; then
+      bad "the last update run hit an installer error (see ${ulog}): $(printf '%s\n' "$last_block" | grep '^\[error\]' | tail -1 | cut -c1-90)"
+    elif [ "$age_days" -gt 10 ]; then
+      note "last update ran ${age_days} days ago; the weekly job may not be firing (check: ${ulog})"
+    else
+      ok "last update log: ${last_line}"
+    fi
+  else
+    note "no update has run yet (${UPDATE_LOG} empty or not present)"
+  fi
 
   echo
   if [ "$fail" -gt 0 ]; then echo "RESULT: ${fail} problem(s), ${warn} warning(s)."; return 1
@@ -1265,8 +1293,6 @@ EOF
 
   echo >/dev/tty; echo "Registered '${alias}'. Testing..." >/dev/tty
   if cmd_test "$alias"; then
-    # Resolve and cache the account id so the first real command is not slower
-    # than every one after it.
     # Resolve and cache the account id now, so the first tunnel or Access
     # command is not slower than every one after it - and so a token that cannot
     # resolve one says so here, while the operator is still at the keyboard,
@@ -1453,6 +1479,7 @@ cmd_repin() {
 
 cmd_rm_host() {
   [ "$#" -eq 1 ] || die "usage: hh rm-host <alias>"
+  [ "$(id -u)" -eq 0 ] || sudo -v || die "rm-host needs sudo (run from an admin shell, not the Claude UI)"
   local f="${REG_DIR}/$1.conf"; [ -f "$f" ] || die "no such host"
   local cred; cred="$(conf_get "$f" CRED)"
   sudo rm -f "$f"
