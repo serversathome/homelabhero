@@ -5,9 +5,10 @@
 ## Cloudflare: DNS, Tunnels, and Access
 
 
-Cloudflare is the front door. Same problem as the mesh, same fix: asking the
-host running `cloudflared` tells you nothing when that host is down, and
-Cloudflare's edge answers either way.
+Cloudflare is the front door. It has the same blind spot the
+[NetBird page](netbird.md) describes, and the same fix: asking the host running
+`cloudflared` tells you nothing when that host is down, and Cloudflare's edge
+answers either way.
 
     hh cloudflare summary
     hh cloudflare tunnels

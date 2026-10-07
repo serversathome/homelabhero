@@ -8,7 +8,8 @@ explains how to report a problem.
 
 Please report suspected vulnerabilities privately, **not** as a public issue:
 
-- Use GitHub's private ["Report a vulnerability"](https://github.com/serversathome/homelabhero/security/advisories/new)
+- Use GitHub's private
+  ["Report a vulnerability"](https://github.com/serversathome/homelabhero/security/advisories/new)
   advisory form, or
 - email the maintainers at the address on the `serversathome` GitHub profile.
 
@@ -33,8 +34,9 @@ rule, may run **only** the six broker helpers (`hh-connect`, `hh-provision`,
 `hh-unifi`, `hh-firewalla`, `hh-netbird`, `hh-cloudflare`) and **only** as
 `hhvault`. The SSH broker reads the key or password, opens the connection, and
 returns output; the API brokers read a token from the vault and call the
-vendor API with it. Credential material never enters the agent's context. The broker validates the alias, refuses loopback targets, and confirms
-the credential path lives inside the vault.
+vendor API with it. Credential material never enters the agent's context. The
+broker validates the alias, refuses loopback targets, and confirms the credential
+path lives inside the vault.
 
 Every brokered command and every provisioning event is written to
 `/var/log/homelabhero-broker.log`, which is owned by `hhvault` and unreadable by
@@ -51,7 +53,7 @@ Every brokered command and every provisioning event is written to
 - It does not restrict *what* Claude may run on a host it is already allowed to
   reach. That is handled by the approval prompts and the confirm-first rule in
   the ops brain (`ops/CLAUDE.md`) plus the permission posture in
-  `ops/.claude/settings.json` — a separate, softer layer.
+  `ops/.claude/settings.json`, a separate, softer layer.
 - The vault keys are stored unencrypted (they must be, for non-interactive
   automation). Their safety rests entirely on the `hhvault` user boundary, so
   **anything that copies the LXC filesystem copies the keys**: treat snapshots

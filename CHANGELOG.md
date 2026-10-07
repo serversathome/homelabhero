@@ -24,6 +24,56 @@ easy to get wrong and changes if a date is added to the heading.
 When adding a version, keep the three in sync: the anchor (`v1-1-0`), the git
 tag (`v1.1.0`), and `HH_VERSION` in `bin/hh` (`1.1.0`).
 
+<a id="v1-6-2"></a>
+
+## 1.6.2 (2026-10-07)
+
+Documentation only, plus the shipped TrueNAS notes. No code path changes.
+
+### Added
+
+- `docs/troubleshooting.md`: every line `hh doctor` can print with its fix, the
+  install failures that have actually been reported (no_new_privs, no systemd,
+  the Debian sign-in hang) and the runtime ones (a missing claude, the web UI
+  not starting or not reachable, the weekly update stopping partway, hosts that
+  cannot be reached or cannot sudo, each integration's rejected-credential
+  case), and where the logs are. Linked from the README, the docs index,
+  `install.md` and `updating.md`.
+- `docs/install.md` gains "The port, and keeping the UI off the LAN": `PORT`
+  and `HOST` in `cloudcli.env`, binding to localhost, and what a reverse proxy
+  must pass through (WebSockets) for the chat and the terminal to work.
+- `docs/layout.md` gains "Moving to a new LXC" (what to carry over, with
+  ownership reasserted on the new box) and "Uninstalling" (every path the
+  installer created, and the public keys left behind on the hosts).
+- The docs index says where to start depending on what you are doing.
+
+### Fixed
+
+- `docs/install.md` and `docs/security.md` lost section headings when the
+  README was split into `docs/` in 1.5.2: the install page opened with no
+  heading and a floating "Updating" subsection, and the "What Claude knows"
+  list sat under none. Restored from the pre-split README.
+- `docs/install.md` linked to a heading that lives in `docs/updating.md`
+  (fragment links are not checked by CI), and still said "the `hh` commands
+  below" after the commands moved to their own page.
+- The NetBird and Cloudflare pages read like release notes ("until now",
+  "same problem as the mesh"); they now stand on their own.
+- The README banner described the pre-1.0 npm problem. It now says what is
+  actually true after 1.6.1: a box that only ever updated by cron needs one
+  manual `hh update`, and why.
+- `docs/updating.md` lists what `hh doctor` checks about the weekly job since
+  1.6.1, and no longer implies `git diff` on the ops brain is per-update.
+- The two remaining em dashes, and three lines left unwrapped by earlier edits.
+
+### Changed
+
+- TrueNAS: the release the shipped notes called "26 (beta)" is shipping as
+  TrueNAS 27 (27-RC.1 on 2026-10-06; its betas were numbered 26). The
+  capability catalog, the TrueNAS skills, `infra/truenas.md`, `docs/layout.md`
+  and the installer's no_new_privs advice say so. The version-detection
+  guidance is unchanged: read `system.version` and the live method list rather
+  than trusting a number.
+
 <a id="v1-6-1"></a>
 
 ## 1.6.1 (2026-10-07)

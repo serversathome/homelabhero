@@ -5,7 +5,7 @@ register the machines it will manage.
 
 [← back to the README](../README.md)
 
-
+## Install and update
 
 On a fresh Ubuntu 26.04 LXC, run one command. (The installer is Ubuntu/Debian
 only: it uses `apt`, `systemd`, and `visudo`. It has not been tested on other
@@ -27,14 +27,33 @@ When it finishes, open the web UI in your browser on **port 3001**:
 The installer prints that exact address with the IP filled in as its last line.
 (3001 is the default; if you changed `PORT=` in `/etc/homelabhero/cloudcli.env`,
 use that port instead.) On your first visit, create your web login, open the
-`homelab-ops` project, and — if it asks — click the gear icon and turn tools on.
+`homelab-ops` project, and, if it asks, click the gear icon and turn tools on.
 
 From that point on you live in the web UI and talk to Claude in plain language
 ("how is everything doing", "what's running", "restart jellyfin"). You do not
 need to remember any commands.
 
-The `hh` commands below still exist for power users and are available in the web
-UI's built-in terminal, but the normal experience is the browser.
+The `hh` commands (see the [command reference](commands.md)) still exist for
+power users and are available in the web UI's built-in terminal, but the normal
+experience is the browser.
+
+### The port, and keeping the UI off the LAN
+
+The web UI listens on port 3001 on every interface, over plain HTTP, because a
+fresh LXC on a home LAN is the common case. Both are set in
+`/etc/homelabhero/cloudcli.env`, which the installer never overwrites:
+
+    PORT=3001
+    HOST=0.0.0.0
+
+Change either, then `sudo systemctl restart homelab-cc`. `HOST=127.0.0.1` binds
+it to the LXC alone, which is the setting to use when something else terminates
+TLS in front of it. Any reverse proxy works, with one requirement: the web
+terminal and the chat both run over WebSockets, so the proxy must pass those
+through (`proxy_http_version 1.1` plus the `Upgrade` and `Connection` headers
+in nginx; Caddy and Traefik do it by default). If the LAN is not fully trusted,
+put the UI behind TLS, a VPN such as the NetBird mesh, or a Cloudflare Access
+policy; the web login alone is not a strong boundary.
 
 ### Updating to the latest code
 
@@ -50,8 +69,8 @@ packages, the service), then patches the OS and runs a health check. It is a
 **reinstall, not a reconfigure** and fully idempotent: it keeps your users, your
 credentials, your registered hosts (your `hh list` is left exactly as-is), and
 your ops notes, and skips Claude sign-in if you are already signed in. See
-[Staying up to date](#staying-up-to-date-with-homelabhero-itself) for exactly
-what it does and does not touch.
+[Staying up to date](updating.md#staying-up-to-date-with-homelabhero-itself)
+for exactly what it does and does not touch.
 
 If you are onboarding a box that predates self-update (no
 `/etc/homelabhero/install.conf`), run the install one-liner once to enable it,
@@ -67,7 +86,7 @@ To see which version you are on and what changed between releases:
 [CHANGELOG.md](../CHANGELOG.md) explains every release: what was added, what
 changed, and anything worth knowing before you update.
 
-
+## Discovery (point and click)
 
 `hh scan` sweeps your subnet (auto-detected, or pass a CIDR) for live management
 endpoints and guesses what each is (Proxmox on 8006, SSH on 22, and so on), marking
@@ -86,15 +105,18 @@ and a UniFi console is identified by name and version:
     Found your router: a UniFi OS console running Network 9.0.114 at 10.99.0.1
 
 Pick it during install (step 10) or any time after, and it registers with an API
-key instead of SSH. This is the router integration below.
+key instead of SSH. This is the [UniFi integration](integrations/unifi.md).
 
-
+## Adding servers from the UI
 
 You do not have to shell in to add machines. Just ask Claude in the browser, e.g.
 "add my TrueNAS at 10.0.0.20". Claude runs `hh provision`, which registers the
 host and generates a keypair in the vault, then hands you the public key to paste
 into the target's admin UI (TrueNAS user SSH keys, Proxmox authorized_keys, a
 Linux authorized_keys, or a MikroTik's `/user ssh-keys import`). No password
-ever passes through the chat, and the agent never sees the private key. `hh test <alias>` confirms it once the key is
-installed. Password-based onboarding stays in the shell-only `hh add-host` for an
-admin, since a password can't be handled safely in an LLM session.
+ever passes through the chat, and the agent never sees the private key.
+`hh test <alias>` confirms it once the key is installed. Password-based
+onboarding stays in the shell-only `hh add-host` for an admin, since a password
+cannot be handled safely in an LLM session.
+
+Something not working? See [troubleshooting](troubleshooting.md).

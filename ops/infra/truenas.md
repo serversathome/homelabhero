@@ -9,7 +9,7 @@ and host for a set of Docker apps plus the monitoring stack.
 - Key datasets and what lives on them: `<...>`
 - Apps runtime (native Docker apps vs custom compose): `<...>`
 - TrueNAS version and VM/container backend: `<e.g. 25.10 = Incus (virt.instance),
-  26 = libvirt (vm.* + libvirt_lxc), 24.10 = libvirt VMs only>`
+  27 (and the 26 betas) = libvirt (vm.* + libvirt_lxc), 24.10 = libvirt VMs only>`
 - Replication targets / schedule: `<...>`
 - SMART / scrub schedule: `<...>`
 
@@ -76,7 +76,8 @@ and containers depends on the release. Never assume the method names.
   Namespace `virt.instance.*` (the `type` field is CONTAINER or VM), plus
   `virt.global.config` for the instances pool. Instance disks are zvols in a
   hidden `.ix-virt` dataset on that pool.
-- 26 (beta): Incus removed, replaced by libvirt driving QEMU/KVM VMs (`vm.*`) and
+- 27 (pre-release; its betas were numbered 26): Incus removed, replaced by
+  libvirt driving QEMU/KVM VMs (`vm.*`) and
   libvirt_lxc containers. The upgrade migrates `.ix-virt` Incus zvols into
   libvirt VM definitions.
 
@@ -90,7 +91,7 @@ truenas-middleware skill to read live method schemas when a name is unclear.
 
 ## Known gotchas
 
-- 26 upgrade from an Incus release (25.04/25.10): expect surprises during the
+- 27 (or 26 beta) upgrade from an Incus release (25.04/25.10): expect surprises during the
   Incus-to-libvirt migration. Reported cases: LXCs orphaned (left in hidden
   dirs), VMs that disappear from the UI while their zvols survive under
   `.ix-virt`, legacy "Containers"-screen VMs that no longer autostart, and

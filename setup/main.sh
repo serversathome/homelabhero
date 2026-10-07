@@ -69,7 +69,8 @@ preflight() {
           - Proxmox LXC works as-is (the flag is not set there by default).
 
           - On TrueNAS, recreate the instance as "privileged". TrueNAS switched
-            its container backend from Incus (25.x) to libvirt (26), so the exact
+            its container backend from Incus (25.x) to libvirt (27, betas numbered
+            26), so the exact
             toggle moved between versions and some builds keep the flag on even
             when privileged. If it still fails after that, run HomelabHero in a
             VM instead: a VM has its own kernel and none of these restrictions.
@@ -92,7 +93,8 @@ EOF
         re-run this installer there.
 
         Do NOT recreate the container as privileged: this is not a container
-        setting, and on TrueNAS 26 the ID Map Type is fixed at creation, so that
+        setting, and on TrueNAS 27 (and the 26 betas) the ID Map Type is fixed at
+        creation, so that
         costs a full rebuild and does not fix this.
 EOF
       if [ "$(id -u)" -eq 0 ]; then

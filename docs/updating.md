@@ -67,8 +67,9 @@ update still lands and your previous file is saved as `<file>.bak-<timestamp>` f
 nothing is lost either way.
 
 The baseline holds only the files HomelabHero ships. Your notes under `infra/`,
-`inventory/`, `runbooks/` and `hosts/` are not in it and are not compared, so editing
-them - which is what they are for - never shows up as a modified shipped file.
+`inventory/`, `runbooks/` and `hosts/` are not in it and are not compared, so
+editing them - which is what they are for - never shows up as a modified shipped
+file.
 
 Even so, the best home for local additions is **`CLAUDE.local.md`**, which `CLAUDE.md`
 imports and the installer never touches. Put your name, your house rules, and pointers
@@ -79,5 +80,8 @@ it yourself after an update if you want per-update diffs.
 
 Because an update can occasionally break something, `hh doctor` checks the whole
 chain in one pass: the users, the broker, vault permissions, the service, Claude's
-version, every host's reachability, and the last update result. Run it any time; the
-auto-update runs it for you after each update.
+version, every host's reachability, and the weekly job itself: that
+`/etc/cron.d/homelabhero` exists, that the last run is not more than ten days old,
+and that the installer logged no `[error]` during it. Run it any time; the
+auto-update runs it for you after each update, and
+[troubleshooting](troubleshooting.md) explains each line it can print.

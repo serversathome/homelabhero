@@ -44,11 +44,12 @@ recalling a name:
     # what VM/container methods actually exist on THIS box
     midclt call core.get_methods | python3 -c "import json,sys;[print(k) for k in sorted(json.load(sys.stdin)) if k.split('.')[0] in ('vm','virt','container')]"
 
-Expect one of: `vm.*` (libvirt VMs, on 24.10 and earlier, and again on 26),
-`virt.instance.*` plus `virt.global.*`/`virt.device.*`/`virt.volume.*` (Incus,
-on 25.04 and 25.10), or a libvirt_lxc container namespace (26). Pair the result
-with `midclt call system.version` so you know which era you are on. On 26 beta
-the names are still shifting - trust the live list, not memory.
+Expect one of: `vm.*` (libvirt VMs, on 24.10 and earlier, and again on 27, whose
+betas were numbered 26), `virt.instance.*` plus
+`virt.global.*`/`virt.device.*`/`virt.volume.*` (Incus, on 25.04 and 25.10), or
+a libvirt_lxc container namespace (27). Pair the result with
+`midclt call system.version` so you know which era you are on. On a 27
+pre-release the names may still move - trust the live list, not memory.
 
 ## Inspect a method BEFORE you call it
 
