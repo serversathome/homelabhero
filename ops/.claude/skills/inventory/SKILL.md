@@ -6,7 +6,7 @@ description: >
   exist, "what's on <host>", "give me the full picture", "what do I have",
   capacity of guests, or wants an audit of the whole estate. Also use it as the
   grounding step before any change so you are working from current truth, not
-  assumptions. Trigger it even when he does not say the word "inventory" but is
+  assumptions. Trigger it even when the operator does not say the word "inventory" but is
   clearly asking what exists or what is deployed where.
 ---
 

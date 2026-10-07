@@ -674,23 +674,39 @@ BYOP="${API}/reverse-proxies"
 # BYOP arrived in NetBird 0.72. A management server older than that - or a
 # self-hosted build without the reverse proxy - answers 404 on every path under
 # /api/reverse-proxies. That is a fact about the deployment rather than a fault,
-# so these three say so plainly instead of relaying a bare HTTP 404, the same
-# way `traffic` explains a plan it is not on. Only these named ops get the
-# softer message: `hh netbird get` still reports the 404 verbatim, because
-# someone typing a path by hand wants to know exactly what came back.
+# so these ops say so plainly instead of relaying a bare HTTP 404, the same way
+# `traffic` explains a plan it is not on. Only these named ops get the softer
+# message: `hh netbird get` still reports the 404 verbatim, because someone
+# typing a path by hand wants to know exactly what came back.
+#
+# ONLY a 404 gets it. This used to soften every failure, so a rejected token, a
+# timeout or a TLS pin that no longer matched all read as "BYOP is not
+# available", which is the one thing none of them means. Those now fail the
+# way they do everywhere else in this broker: _read's own message, exit 2.
+# Returns 1 for the soft case (the caller exits clean) and 2 for a real one.
 _byop_read() {
-  local out rc=0
-  out="$(_read "$1" 2>/dev/null)" || rc=$?
+  local out err rc=0
+  err="$(mktemp)"
+  out="$(_read "$1" 2>"$err")" || rc=$?
   if [ "$rc" -ne 0 ]; then
-    echo "Bring Your Own Proxy is not available on this NetBird." >&2
-    echo "(BYOP needs NetBird 0.72 or newer. Everything else here works regardless.)" >&2
-    return 1
+    if grep -q '(HTTP 404)' "$err"; then
+      rm -f "$err"
+      echo "Bring Your Own Proxy is not available on this NetBird." >&2
+      echo "(BYOP needs NetBird 0.72 or newer. Everything else here works regardless.)" >&2
+      return 1
+    fi
+    cat "$err" >&2; rm -f "$err"
+    return 2
   fi
+  rm -f "$err"
   printf '%s' "$out"
 }
+# The soft case exits clean; anything else is already explained on stderr and
+# must fail the op. Used as: j="$(_byop_read ...)" || { _byop_rc "$?"; return 0; }
+_byop_rc() { [ "$1" -eq 1 ] || exit "$1"; }
 
 op_proxies() {
-  local j; j="$(_byop_read "${BYOP}/clusters")" || return 0
+  local j; j="$(_byop_read "${BYOP}/clusters")" || { _byop_rc "$?"; return 0; }
   _expect_array "$j" "${BYOP}/clusters"
   if [ "$(printf '%s' "$j" | jq -r 'length')" -eq 0 ]; then
     echo "No reverse-proxy clusters registered (BYOP is not in use on this account)."
@@ -707,7 +723,7 @@ op_proxies() {
 }
 
 op_services() {
-  local j; j="$(_byop_read "${BYOP}/services")" || return 0
+  local j; j="$(_byop_read "${BYOP}/services")" || { _byop_rc "$?"; return 0; }
   _expect_array "$j" "${BYOP}/services"
   if [ "$(printf '%s' "$j" | jq -r 'length')" -eq 0 ]; then
     echo "No services published through a NetBird reverse proxy."
@@ -725,13 +741,13 @@ op_services() {
 
 op_service() {
   [ "$#" -ge 1 ] || die "usage: hh netbird service [alias] <name-or-id>"
-  local all; all="$(_byop_read "${BYOP}/services")" || return 0
+  local all; all="$(_byop_read "${BYOP}/services")" || { _byop_rc "$?"; return 0; }
   _expect_array "$all" "${BYOP}/services"
   _resolve_one "$1" "$all" "service" | jq '.'
 }
 
 op_domains() {
-  local j; j="$(_byop_read "${BYOP}/domains")" || return 0
+  local j; j="$(_byop_read "${BYOP}/domains")" || { _byop_rc "$?"; return 0; }
   _expect_array "$j" "${BYOP}/domains"
   if [ "$(printf '%s' "$j" | jq -r 'length')" -eq 0 ]; then
     echo "No apex domains registered for reverse proxying."
@@ -746,15 +762,27 @@ op_domains() {
 # Network traffic events are a paid NetBird feature, so this is the one read op
 # that is allowed to come back empty-handed with an explanation instead of an
 # error: not being on the plan is a fact about your account, not a fault.
+#
+# That covers a 402 (plan), a 403 (this token may not read them) and a 404 (a
+# server without the feature). It does NOT cover a 401, a timeout, a rate
+# limit or a pin mismatch: those used to get the same reassuring line, and an
+# expired token has nothing to do with which plan you are on.
 op_traffic() {
   local n; n="$(_limit "${1:-}" 20)"
-  local j rc=0
-  j="$(_read "${API}/events/network-traffic" "page=1" "page_size=${n}" 2>/dev/null)" || rc=$?
+  local j err rc=0
+  err="$(mktemp)"
+  j="$(_read "${API}/events/network-traffic" "page=1" "page_size=${n}" 2>"$err")" || rc=$?
   if [ "$rc" -ne 0 ]; then
-    echo "Network traffic events are not available on this account."
-    echo "(They are a paid NetBird feature; the audit log is on every plan: hh netbird events)"
-    return 0
+    if grep -qE '\(HTTP 40[234]\)' "$err"; then
+      rm -f "$err"
+      echo "Network traffic events are not available on this account."
+      echo "(They are a paid NetBird feature; the audit log is on every plan: hh netbird events)"
+      return 0
+    fi
+    cat "$err" >&2; rm -f "$err"
+    exit 2
   fi
+  rm -f "$err"
   # This endpoint is paginated, so it answers with an envelope - but which key
   # holds the rows has moved between NetBird versions, and a bare array is also
   # possible. Normalise all of those to a list here rather than indexing one

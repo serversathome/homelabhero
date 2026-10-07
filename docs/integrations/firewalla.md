@@ -5,7 +5,7 @@
 ## Your Firewalla (read-only, on purpose)
 
 
-A Firewalla (Gold, Gold SE, Gold Plus, Purple, Blue Plus) can be registered the
+A Firewalla (Gold, Gold SE, Gold Plus, Purple, Purple SE, Blue Plus) can be registered the
 same way. It shows up in `hh list` like anything else, and `hh overview` and
 `hh inventory` include it:
 

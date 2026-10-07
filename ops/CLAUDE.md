@@ -15,7 +15,7 @@ breaks.
 You never use raw ssh, and you never handle credentials. All connections go
 through a broker that holds the credentials for you:
 
-    hh list                       # registered hosts: alias, platform, ip, port, user
+    hh list                       # registered hosts: alias, platform, host, port, user, auth, access
     hh run <alias> "<command>"    # run a command on a host and return the output
     hh test <alias>               # connectivity check
     hh overview                   # read-only vitals sweep across all hosts

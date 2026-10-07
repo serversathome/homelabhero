@@ -23,20 +23,54 @@ Where everything lives on disk, what differs per platform, and what to back up.
     ├── templates/                 sudoers, systemd unit, cron job, cloudcli env,
     │                              logrotate rules, bash completion
     └── ops/                       becomes ~hhagent/homelab-ops (git-backed)
-        ├── CLAUDE.md              always-loaded context + house rules
+        ├── CLAUDE.md              always-loaded context + house rules (shipped)
+        ├── CLAUDE.local.md        your additions; created on the box, never
+        │                          overwritten, imported by CLAUDE.md
         ├── capabilities/          per-platform capability catalogs
         │                          (proxmox, truenas, linux, routeros, unifi,
         │                           firewalla, netbird, cloudflare)
-        ├── infra/                 environment-specific references
-        ├── inventory/             saved inventory snapshots
-        ├── runbooks/              resolved incidents accumulate here
+        ├── infra/                 environment-specific references (yours)
+        ├── inventory/             saved inventory snapshots (yours)
+        ├── runbooks/              resolved incidents accumulate here (yours)
+        ├── hosts/                 a README explaining the registry (yours)
         └── .claude/
             ├── settings.json      permission posture (forces the broker)
-            └── skills/            triage, inventory, add-server, proxmox,
-                                   truenas, truenas-middleware, docker,
-                                   host (linux), network, unifi and firewalla
-                                   (both read-only), backup-restore,
-                                   security-audit, patch-management, deploy-app
+            └── skills/            homelab-triage, inventory, add-server,
+                                   proxmox-ops, truenas-ops, truenas-middleware,
+                                   docker-stack-ops, host-ops, network-diag,
+                                   unifi-ops and firewalla-ops (both read-only),
+                                   netbird-ops and cloudflare-ops (can write),
+                                   backup-restore, security-audit,
+                                   patch-management, deploy-app
+
+## On an installed box
+
+What the installer puts outside the ops brain, and who owns it:
+
+    /usr/local/bin/hh, hh-connect, hh-unifi, hh-firewalla,
+                   hh-netbird, hh-cloudflare, hh-provision, hh-update
+                                 the CLI and brokers (root-owned, re-installed
+                                 on every update)
+    /etc/homelabhero/
+    ├── hosts.d/<alias>.conf     the host registry: non-secret, world-readable
+    ├── vault/                   credentials (owned by hhvault, mode 700)
+    ├── shipped/                 pristine copy of the last-delivered ops files,
+    │                            used to tell your edits from stale versions
+    ├── install.conf             where the git checkout lives, which branch
+    └── cloudcli.env             web UI port and bind address (yours)
+    /etc/sudoers.d/homelabhero   the one rule letting hhagent run the brokers
+    /etc/cron.d/homelabhero      the weekly auto-update (yours once edited)
+    /etc/logrotate.d/homelabhero rotation for the two logs below
+    /etc/bash_completion.d/hh    tab completion for the CLI
+    /etc/systemd/system/homelab-cc.service
+                                 the web UI service (regenerated on every update)
+    /var/log/homelabhero-update.log   what each hh update run did
+    /var/log/homelabhero-broker.log   every brokered command (hhvault-only)
+    ~hhagent/homelab-ops/        the ops tree above
+    ~hhagent/.nvm/               Node, kept at the latest LTS; versions no
+                                 longer in use are removed on each update
+    ~hhagent/.local/bin/claude   Claude Code, when installed natively
+    ~/.homelabhero/              the git checkout the installer runs from
 
 ## Platform notes
 
@@ -71,8 +105,10 @@ Where everything lives on disk, what differs per platform, and what to back up.
   MSP over the internet and needs an MSP account - and it goes down when your
   internet does. Unlike UniFi there is no view-only token to mint, so the
   GET-only broker is the only thing keeping that token from being able to write.
-- No MCP servers and no Grafana/Prometheus. The whole surface is SSH, two
-  read-only router APIs, plus the capability catalogs, kept simple on purpose.
+- No MCP servers and no Grafana/Prometheus. The whole surface is SSH, the four
+  API brokers (UniFi and Firewalla read-only by construction, NetBird and
+  Cloudflare able to write with a credential that allows it), plus the
+  capability catalogs, kept simple on purpose.
 
 ## Persistence and backup
 

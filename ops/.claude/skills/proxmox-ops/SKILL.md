@@ -5,7 +5,7 @@ description: >
   Proxmox, PVE, a VM or LXC container, a hypervisor node, "qm", "pct", cluster
   quorum, HA, migration, a VM that won't boot or is stuck, a node running hot or
   unreachable, VM/container backups (vzdump), or Proxmox storage. Trigger this
-  even if he only names a VM or container by ID or purpose and wants it started,
+  even if the operator only names a VM or container by ID or purpose and wants it started,
   stopped, checked, or fixed. Prefer this over generic shell reasoning for
   anything hypervisor-level.
 ---

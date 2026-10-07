@@ -947,7 +947,7 @@ op_access_revoke() {
     | ([.[] | select(((.name // "") | ascii_downcase) | contains($q | ascii_downcase))]) as $fuzzy
     | if ($exact | length) > 0 then $exact else $fuzzy end')"
   case "$(printf '%s' "$app" | jq -r 'length')" in
-    0) die "no Access application matches '$1' (list them with: hh cloudflare access ${ALIAS})" ;;
+    0) die "no Access application matches '$1' (list them with: hh cloudflare access-apps ${ALIAS})" ;;
     1) : ;;
     *) die "'$1' matches several Access applications; name one exactly:
 $(printf '%s' "$app" | jq -r '.[] | "        \(.name)  \(.id)"')" ;;

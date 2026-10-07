@@ -24,6 +24,106 @@ easy to get wrong and changes if a date is added to the heading.
 When adding a version, keep the three in sync: the anchor (`v1-1-0`), the git
 tag (`v1.1.0`), and `HH_VERSION` in `bin/hh` (`1.1.0`).
 
+<a id="v1-6-1"></a>
+
+## 1.6.1 (2026-10-07)
+
+A pass over the repository for anything stale, contradictory or quietly
+unfinished. No command changes its signature.
+
+### Fixed
+
+- The weekly auto-update was aborting the installer partway through, every
+  week, on every box. Debian cron starts a job with `PATH=/usr/bin:/bin`, and
+  the sudoers step calls `visudo`, which lives in `/usr/sbin`; under cron that
+  was "command not found", reported as "sudoers template failed validation",
+  and the installer stopped there. The CLI binaries, installed in the step
+  before, did update; the ops brain, Node, claude and the service unit did
+  not. `hh update` from a shell goes through sudo's `secure_path`, which has
+  `/usr/sbin`, so it worked, and the failure sat in
+  `/var/log/homelabhero-update.log` where nothing surfaced it. Both
+  `hh-update` and the installer now append the sbin directories to `PATH`,
+  the cron template sets a full one for new installs, and the installer says
+  "visudo not found" when that is what happened. `hh doctor` (below) now also
+  reports an installer error from the last run, so a repeat of this cannot be
+  silent.
+
+  To check whether a box was affected:
+
+      grep -c "sudoers template failed" /var/log/homelabhero-update.log*
+
+  Every fix shipped as "heals itself on the next weekly update" since the
+  weekly job began - the three-way sync for edited files (1.3.1), the baseline
+  seeding and prune (1.3.3, 1.5.3), preferring a native claude (1.3.0) - took
+  effect only on boxes where someone ran `hh update` or the installer by hand.
+  The first cron run after this update does what that manual run would have:
+  the service restarts, and a box with no baseline yet keeps the previous copy
+  of any edited shipped file as `<file>.bak-<stamp>`, as the 1.3.1 notes
+  describe.
+- `hh netbird proxies`, `services`, `service` and `domains` softened EVERY
+  failure to "Bring Your Own Proxy is not available on this NetBird", exit 0,
+  and `hh netbird traffic` did the same with "not available on this account".
+  A rejected token, a timeout, a rate limit and a TLS pin mismatch all got the
+  same reassuring line. Only a 404 means a server without BYOP, so only a 404
+  gets that message now (a 402, 403 or 404 for `traffic`, since a plan limit
+  can answer either way); everything else fails with the broker's usual
+  message and exit 2, as every other op does.
+- `hh unifi device` and `hh unifi stats` validate the device id before splicing
+  it into a URL. The `get` op already checked its whole path; these two took
+  the id as given, so an id containing a slash or a query string reached a
+  different endpoint than the one named. UniFi ids are opaque strings with none
+  of those characters, so nothing legitimate is refused.
+- The Cloudflare broker's "no Access application matches" message pointed at
+  `hh cloudflare access`, the pre-1.4.0 name. It now names `access-apps`, the
+  op that is documented and allow-listed (the old name still works when typed).
+- `hh rm-host` checks for sudo up front like every other operator command,
+  instead of failing partway through.
+- `SECURITY.md` said the agent may run "the two broker helpers". The sudoers
+  rule has granted six since the API brokers arrived, and `docs/security.md`
+  already said so; both now agree.
+- `docs/layout.md` described "two read-only router APIs" and listed the skills
+  as of 1.3.0, omitting `netbird-ops` and `cloudflare-ops`. It also promised
+  "where everything lives on disk" and then showed only the repository tree;
+  it now lists what the installer puts under `/etc`, `/var/log` and
+  `~hhagent`, and who owns each piece.
+- `docs/security.md` named four capability catalogs; there are eight.
+- `docs/commands.md` lacked `hh inventory --save`, `hh scan --add`, the `hh cf`
+  alias, and what `--force` does. `docs/updating.md` claimed `git diff` on the
+  ops brain shows what an update changed; the installer commits only at first
+  install, so the diff is cumulative, and the page says so.
+- `ops/hosts/README.md` documented six registry keys. Entries for API hosts
+  also carry `PIN`, `WRITE`, `SITE`/`SITE_NAME`, `GID`/`BOX` and `ACCOUNT`,
+  which the skills rely on, so they are listed.
+- `CLAUDE.md` described the `hh list` columns as "alias, platform, ip, port,
+  user" and then depended on the `ACCESS` column it left out.
+- Five shipped skills referred to the operator as "he". They say "the
+  operator" now, the same personalisation fix that kept a name out of them.
+- The Firewalla docs page lists the Purple SE, as the capability catalog did.
+
+### Changed
+
+- `hh doctor` checks the weekly auto-update job itself, not just the last log
+  line: it reports a missing `/etc/cron.d/homelabhero`, a last run more than
+  ten days old, and any `[error]` the installer logged during the last run,
+  which until now was visible only to someone who opened the log. It reads the
+  rotated log when logrotate has just truncated the live one.
+- The installer removes Node versions nothing uses. Every weekly run does
+  `nvm install --lts` and nvm keeps every version it ever installed, so a box
+  collected one Node tree per LTS bump, each a few hundred MB with its own copy
+  of the global packages. After the service has been restarted onto the
+  current version, every other one under `~hhagent/.nvm/versions/node` is
+  uninstalled. The order matters and is deliberate: the restart comes first, so
+  the running service is never pulled out from under itself.
+- The nvm installer is pinned to v0.40.8 (was v0.40.1). This only affects a
+  fresh install; a box that already has nvm keeps it.
+
+### Removed
+
+- The installer no longer deletes `/usr/local/bin/hh-upgrade`. That binary
+  was retired before 1.0.0, so no box installed from a release ever had it.
+  The 1.5.3 baseline prune stays: it heals boxes that took 1.3.3 by hand, and
+  given the cron fault above, some of those have not run an update since.
+
 <a id="v1-6-0"></a>
 
 ## 1.6.0 (2026-09-23)

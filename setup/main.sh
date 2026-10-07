@@ -27,6 +27,9 @@ NODE_LTS_MIN=22
 # interactive steps - Claude sign-in (9) and adding servers (10). Everything else
 # is idempotent, so an update produces exactly what a fresh install does.
 HH_NONINTERACTIVE="${HH_NONINTERACTIVE:-0}"
+# visudo and useradd live in /usr/sbin, which a cron job's default PATH lacks.
+# Appended, so whatever PATH the caller chose still wins for everything else.
+export PATH="${PATH}:/usr/local/sbin:/usr/sbin:/sbin"
 
 say()  { printf '\n\033[1;36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
@@ -168,9 +171,6 @@ $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-cloudflare" /usr/local
 $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh"         /usr/local/bin/hh
 $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-update"  /usr/local/bin/hh-update
 $SUDO install -o root -g root -m 755 "${REPO_ROOT}/bin/hh-provision" /usr/local/bin/hh-provision
-# hh-upgrade was merged into hh-update (one `hh update` command does everything);
-# remove the retired binary from boxes that had it.
-$SUDO rm -f /usr/local/bin/hh-upgrade
 # Record where this git checkout lives (non-secret) so hh-update can pull future
 # releases and re-run this installer, weekly. Branch and remote come from the
 # checkout itself so custom forks/branches keep working.
@@ -196,6 +196,8 @@ $SUDO install -o root -g root -m 644 "${REPO_ROOT}/templates/logrotate.homelabhe
 
 # ---------------------------------------------------------------------------
 say "5/10  Sudoers rule (agent may run ONLY the broker, ONLY as vault)"
+command -v visudo >/dev/null 2>&1 \
+  || die "visudo not found on PATH (${PATH}); it ships with sudo in /usr/sbin and is needed to validate the sudoers rule."
 TMP_SUDO="$(mktemp)"
 cp "${REPO_ROOT}/templates/sudoers.homelabhero" "$TMP_SUDO"
 if $SUDO visudo -cf "$TMP_SUDO" >/dev/null; then
@@ -399,7 +401,7 @@ say "7/10  Node (nvm) + Claude Code + claudecodeui, as ${AGENT_USER}"
 sudo -u "$AGENT_USER" -i bash <<'AGENT'
 set -e
 export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] || curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+[ -s "$NVM_DIR/nvm.sh" ] || curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.8/install.sh | bash
 . "$NVM_DIR/nvm.sh"
 nvm install --lts
 nvm alias default 'lts/*'
@@ -513,6 +515,28 @@ $SUDO systemctl enable homelab-cc.service >/dev/null 2>&1 || true
 # it must pick up the new unit, Node, and cloudcli/claude. On a fresh install this
 # simply starts it. This is why hh-update no longer restarts separately.
 $SUDO systemctl restart homelab-cc.service
+
+# Every run does `nvm install --lts`, and nvm keeps every version it ever
+# installed, so a box collects one Node tree per LTS bump - each a few hundred
+# MB with its own copy of the global packages - and nothing ever uses the old
+# ones again. The unit written above pins the service to NODE_BIN and the
+# restart just moved it there, so every other version is now unreferenced and
+# can go. Done AFTER the restart on purpose: until then the running service may
+# still be executing out of one of them.
+KEEP_NODE="$(basename "$(dirname "$NODE_BIN")")"   # NODE_BIN is .../node/vX.Y.Z/bin
+case "$KEEP_NODE" in
+  v[0-9]*)
+    for d in "${AGENT_HOME}/.nvm/versions/node"/v*; do
+      [ -d "$d" ] || continue
+      v="$(basename "$d")"
+      [ "$v" = "$KEEP_NODE" ] && continue
+      if nvm_run "nvm uninstall '${v}'" >/dev/null 2>&1; then
+        say "    removed unused Node ${v} (the service runs on ${KEEP_NODE})"
+      else
+        warn "could not remove unused Node ${v} under ${d}; harmless, it only costs disk space"
+      fi
+    done ;;
+esac
 
 # ---------------------------------------------------------------------------
 echo
