@@ -15,7 +15,9 @@ description: >
 # Homelab triage
 
 Purpose: quickly localize a problem to a layer, then hand off to the specific
-skill. Do not fix blindly from here. Localize first.
+skill. Do not fix blindly from here. Localize first. The platform catalogs under
+`capabilities/` are not loaded up front; the skill you hand off to reads the one
+it needs.
 
 ## Step 1: get the wide view
 

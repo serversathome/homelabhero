@@ -64,8 +64,8 @@ You do not have to do anything. Updates arrive on their own: the weekly job runs
 
 That is the one command. It pulls the latest HomelabHero, re-runs the installer
 non-interactively to refresh everything (CLI and broker, skills, `CLAUDE.md`,
-capability docs, Node/npm at the latest LTS, the Claude Code + claudecodeui
-packages, the service), then patches the OS and runs a health check. It is a
+capability docs, Node/npm at the latest LTS, Claude Code and the claudecodeui
+package, the service), then patches the OS and runs a health check. It is a
 **reinstall, not a reconfigure** and fully idempotent: it keeps your users, your
 credentials, your registered hosts (your `hh list` is left exactly as-is), and
 your ops notes, and skips Claude sign-in if you are already signed in. See

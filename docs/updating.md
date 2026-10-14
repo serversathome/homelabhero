@@ -24,10 +24,11 @@ For step 1, `hh update` `git pull`s the branch you installed from (`main` unless
 changed it) and **re-runs the installer non-interactively** - so an update produces
 exactly what a fresh install does:
 the `hh` CLI and broker, the shipped skills / `CLAUDE.md` / capability docs, Node and
-npm at the latest LTS, the Claude Code + claudecodeui packages (reinstalled with the
-correct `--allow-scripts` set so their native modules always build), and the systemd
-unit. Improvements and fixes pushed to the repo reach existing boxes on their own;
-nobody has to re-run the installer by hand.
+npm at the latest LTS, Claude Code (Anthropic's native install, moved forward with
+`claude update`), the claudecodeui package (reinstalled with the correct
+`--allow-scripts` set so its native modules always build), and the systemd unit.
+Improvements and fixes pushed to the repo reach existing boxes on their own; nobody
+has to re-run the installer by hand.
 
 Because it re-runs the real installer, there is no "some changes only the installer can
 apply" gap - `hh update` **is** the installer, plus the OS pass. Node tracks the latest
@@ -71,8 +72,9 @@ The baseline holds only the files HomelabHero ships. Your notes under `infra/`,
 editing them - which is what they are for - never shows up as a modified shipped
 file.
 
-Even so, the best home for local additions is **`CLAUDE.local.md`**, which `CLAUDE.md`
-imports and the installer never touches. Put your name, your house rules, and pointers
+Even so, the best home for local additions is **`CLAUDE.local.md`**, which Claude Code
+loads on every session beside `CLAUDE.md` and the installer never touches. Put your
+name, your house rules, and pointers
 to your own docs there and there is nothing to merge, ever. The ops brain is also a git
 repo: the installer commits it once, at first install, so `git -C ~hhagent/homelab-ops diff`
 shows everything that has changed since then, updates and your own edits alike. Commit

@@ -25,16 +25,17 @@ Where everything lives on disk, what differs per platform, and what to back up.
     └── ops/                       becomes ~hhagent/homelab-ops (git-backed)
         ├── CLAUDE.md              always-loaded context + house rules (shipped)
         ├── CLAUDE.local.md        your additions; created on the box, never
-        │                          overwritten, imported by CLAUDE.md
-        ├── capabilities/          per-platform capability catalogs
-        │                          (proxmox, truenas, linux, routeros, unifi,
-        │                           firewalla, netbird, cloudflare)
+        │                          overwritten, loaded beside CLAUDE.md
+        ├── capabilities/          per-platform capability catalogs, read on
+        │                          demand by the skills (proxmox, truenas, linux,
+        │                          routeros, unifi, firewalla, netbird, cloudflare)
         ├── infra/                 environment-specific references (yours)
         ├── inventory/             saved inventory snapshots (yours)
         ├── runbooks/              resolved incidents accumulate here (yours)
         ├── hosts/                 a README explaining the registry (yours)
         └── .claude/
-            ├── settings.json      permission posture (forces the broker)
+            ├── settings.json      permission posture: pins Manual mode, pre-approves
+            │                      the read-only `hh` reads, denies the rest
             └── skills/            homelab-triage, inventory, add-server,
                                    proxmox-ops, truenas-ops, truenas-middleware,
                                    docker-stack-ops, host-ops, network-diag,
@@ -69,7 +70,8 @@ What the installer puts outside the ops brain, and who owns it:
     ~hhagent/homelab-ops/        the ops tree above
     ~hhagent/.nvm/               Node, kept at the latest LTS; versions no
                                  longer in use are removed on each update
-    ~hhagent/.local/bin/claude   Claude Code, when installed natively
+    ~hhagent/.local/bin/claude   Claude Code (Anthropic's native install; the npm
+                                 package is only the fallback)
     ~/.homelabhero/              the git checkout the installer runs from
 
 ## Platform notes
