@@ -75,6 +75,17 @@ exactly where the machinery helps least. Three tiers:
 only mechanical gate is that `hh run` is not pre-approved, so you see and approve
 the command string before it runs.
 
+That gate depends on the permission mode. Claude Code's own built-in starting
+mode is now **auto**, where a classifier model reviews actions instead of you,
+so the shipped `ops/.claude/settings.json` pins `defaultMode` to `default`
+(Manual): every `hh run` and every write op prompts, and only the read-only `hh`
+commands are pre-approved. The web UI's "skip permissions" toggle would also
+remove the prompt; leave it off. The `deny` list in that file (`ssh`, `scp`,
+`sudo`, the vault path, the host-registration commands) is enforced by Claude
+Code in every mode, including auto and bypass, but it matches the command text
+Claude writes rather than the program, so it is a guard rail and not a
+boundary; the boundary is the `hhvault` user and the broker.
+
 A MikroTik switch sits in this tier too, even though it is the kind of device
 UniFi and Firewalla are read-only to protect. The device can supply the missing
 lock itself: register it with a user in RouterOS's `read` group and RouterOS

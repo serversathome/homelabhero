@@ -24,6 +24,8 @@ Everything goes through one command:
 
 The alias can be omitted when only one Firewalla is registered, which is the
 normal case. `hh list` shows it with platform `firewalla` and auth `token`.
+Read `capabilities/firewalla.md` for the full read surface, the query syntax
+and the qualifier list. It is not loaded up front.
 
 **One alias means one box.** An MSP token sees the whole account, so each alias
 is pinned to a single Firewalla at registration and every read is filtered to it.

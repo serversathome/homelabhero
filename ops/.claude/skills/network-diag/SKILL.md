@@ -12,7 +12,10 @@ description: >
 
 # Network diagnostics
 
-Read `infra/network.md` for topology, subnets, DNS, and mesh CIDR first.
+Read `infra/network.md` for topology, subnets, DNS, and mesh CIDR first. The
+per-platform commands live in `capabilities/` (`linux.md` for host interfaces,
+routes and resolvers; `routeros.md` for a MikroTik switch, which is not a POSIX
+shell), and are not loaded up front: read the one for the host you are probing.
 
 ## Ask the gateway first, if it is registered
 

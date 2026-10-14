@@ -413,30 +413,52 @@ nvm alias default 'lts/*'
 # the service.
 export PATH="$HOME/.local/bin:$PATH"
 
-# Is a NATIVE claude already installed and working? Two decisions hang on this:
-# whether to install the npm package at all, and whether a broken npm package is
-# fatal or merely something to route around.
+# Claude Code comes from Anthropic's native installer, the method its docs
+# recommend: a self-contained binary in ~/.local/bin that keeps itself current
+# in the background, with no npm optional-platform-package to go missing. The
+# npm package (@anthropic-ai/claude-code) ships the very same binary, so it is
+# kept only as the fallback for a box that cannot reach claude.ai's installer.
 native_claude() { [ -x "$HOME/.local/bin/claude" ] && "$HOME/.local/bin/claude" --version >/dev/null 2>&1; }
 
-# A native install WINS, and keeps winning. `hh update` re-runs this installer
-# every week, so anything unconditional here is re-applied every week: leaving
-# the npm package in the list would recreate its bin link and clobber a working
-# native claude on every cron run - the same weekly-clobber dynamic the
-# --allow-scripts fix had to solve one layer up. A native claude also updates
-# itself, so npm has no reason to touch it at all.
+# `hh update` re-runs this installer every week, so anything unconditional here
+# is re-applied every week: leaving the npm claude-code package in the list
+# would recreate its bin link beside a working native claude on every cron run.
+# So the npm list carries it only when the native path has failed.
 pkgs="@cloudcli-ai/cloudcli"
 if native_claude; then
-  echo "[info] native claude present at $HOME/.local/bin/claude ($("$HOME/.local/bin/claude" --version 2>/dev/null | head -1)); leaving it alone and skipping the npm claude-code package."
+  echo "[info] native claude present at $HOME/.local/bin/claude ($("$HOME/.local/bin/claude" --version 2>/dev/null | head -1))"
+  # It updates itself while sessions run, but the web UI drives it through the
+  # SDK rather than an interactive terminal, so make sure the weekly run also
+  # moves it forward. Best effort: being offline here must not fail the install.
+  if out="$(timeout 120 "$HOME/.local/bin/claude" update 2>&1)"; then
+    printf '%s\n' "$out" | tail -1 | sed 's/^/[info] claude update: /'
+  else
+    echo "[warn] claude update did not complete (offline?); keeping $("$HOME/.local/bin/claude" --version 2>/dev/null | head -1)"
+  fi
 else
-  pkgs="@anthropic-ai/claude-code ${pkgs}"
+  echo "[info] installing Claude Code with Anthropic's native installer -> $HOME/.local/bin/claude"
+  if curl -fsSL https://claude.ai/install.sh | bash; then
+    hash -r 2>/dev/null || true
+  fi
+  if native_claude; then
+    echo "[info] native claude installed: $("$HOME/.local/bin/claude" --version 2>/dev/null | head -1)"
+    # A box installed before 1.6.3 has the npm copy too. The native one already
+    # wins on PATH, but two claudes on one box is one more than anybody should
+    # have to reason about, so retire it.
+    if npm ls -g --depth=0 @anthropic-ai/claude-code >/dev/null 2>&1; then
+      npm uninstall -g @anthropic-ai/claude-code >/dev/null 2>&1 && echo "[info] removed the npm claude-code package; the native install replaces it" || true
+    fi
+  else
+    echo "[warn] the native installer did not produce a working claude; falling back to the npm package"
+    pkgs="@anthropic-ai/claude-code ${pkgs}"
+  fi
 fi
 
 # npm v12 BLOCKS dependency install scripts by default (v11 only warns). Those
-# scripts build native modules, so they must be explicitly allowed or the package
-# lands on disk broken. Allow the two first-party packages AND cloudcli's native
-# deps - better-sqlite3 (its DB), node-pty (the web terminal), bcrypt (auth) -
-# which are NOT covered transitively by allowing the top-level package. Older npm
-# ignores the flag and runs scripts anyway, so this is safe everywhere.
+# scripts are what compile claudecodeui's native modules - better-sqlite3 (its
+# DB), node-pty (the web terminal), bcrypt (auth) - and they are NOT covered
+# transitively by allowing the top-level package. Older npm ignores the flag
+# harmlessly. The claude-code entry only matters on the npm fallback path.
 allow="@anthropic-ai/claude-code,@cloudcli-ai/cloudcli,better-sqlite3,node-pty,bcrypt"
 # shellcheck disable=SC2086  # $pkgs is a deliberate list of package arguments.
 if ! out="$(npm install -g --allow-scripts="$allow" $pkgs 2>&1)"; then
@@ -444,9 +466,9 @@ if ! out="$(npm install -g --allow-scripts="$allow" $pkgs 2>&1)"; then
 fi
 printf '%s\n' "$out"
 # Drift guard: if npm still flags ANY package as having uncovered install scripts,
-# a newer cloudcli pulled in a native dep we do not list. Surface the names loudly
+# say so loudly. A new native dep in a future cloudcli release would show up here,
 # so it is fixed before an npm-v12 box silently breaks, rather than letting a
-# hardcoded list quietly rot.
+# weekly cron run quietly leave the web UI unable to start.
 missed="$(printf '%s\n' "$out" | sed -n 's/^npm warn allow-scripts[[:space:]]\{1,\}\([^ ]\{1,\}\)@.*/\1/p' | sort -u | paste -sd, -)"
 if [ -n "$missed" ]; then
   echo "[warn] npm reports install scripts NOT in the allowlist: ${missed}"
@@ -454,29 +476,20 @@ if [ -n "$missed" ]; then
   echo "[warn] add them to the allow-scripts list in setup/main.sh and re-run."
 fi
 
-# Do not trust "npm said ok". The npm package ships the actual binary as a
-# PLATFORM-SPECIFIC OPTIONAL dependency (@anthropic-ai/claude-code-linux-x64),
-# and on some machines npm never resolves it: the install reports success,
-# installs one package instead of two, and leaves behind a claude that cannot
-# start. The only way to know is to run it.
-#
-# When it does not run, install Anthropic's native build instead. It is
-# self-contained, has no optional platform dependency to miss, and lands in
-# ~/.local/bin - which is first on the service's PATH and is what the branch at
-# the top of this block will find (and preserve) on every future update.
+# On the fallback path, do not trust "npm said ok": the npm package pulls the
+# binary in through a platform-specific optional dependency
+# (@anthropic-ai/claude-code-linux-x64) that npm sometimes never resolves, so
+# the install reports success and leaves a claude that cannot start. The only
+# way to know is to run it. With neither path working there is nothing left to
+# try here; the message says what to do by hand.
 if ! native_claude; then
   hash -r 2>/dev/null || true
   if ! claude --version >/dev/null 2>&1; then
-    echo "[warn] the npm-installed claude does not run - npm could not resolve its platform package."
-    echo "[warn] falling back to Anthropic's native installer -> $HOME/.local/bin/claude"
-    curl -fsSL https://claude.ai/install.sh | bash || { echo "[error] the native claude installer failed"; exit 1; }
-    hash -r 2>/dev/null || true
-    native_claude || { echo "[error] claude still does not run after the native install"; exit 1; }
-    # Retire the broken npm copy. The native one already wins on PATH, but two
-    # claudes on one box is one more than anybody should have to reason about.
-    npm uninstall -g @anthropic-ai/claude-code >/dev/null 2>&1 || true
-    echo "[info] native claude installed: $("$HOME/.local/bin/claude" --version 2>/dev/null | head -1)"
+    echo "[error] claude does not run from either the native installer or the npm package."
+    echo "[error] check that this box can reach claude.ai and registry.npmjs.org, then re-run."
+    exit 1
   fi
+  echo "[info] claude installed from the npm package: $(claude --version 2>/dev/null | head -1)"
 fi
 AGENT
 

@@ -55,6 +55,9 @@ front of the hardware. Nothing an agent could usefully automate here is worth
 that risk. So the router is treated as a source of truth to read and reason
 about, and changes stay with the person.
 
+Read `capabilities/unifi.md` for the full read surface and the exact ops. It is
+not loaded up front.
+
 ## What you can read
 
     hh unifi summary          the one-screen picture: WAN, internet, LAN, WiFi,

@@ -115,22 +115,15 @@ When it may:
    confirmation step.** It prints exactly what would change. Do not re-run it
    with `--force` on your own initiative - relay what it said, in your own
    words, and let the user decide. Then run it.
-2. **There is no generic write op.** No `post`, `put`, or `raw` on either. If
-   what someone wants is not a named op, say so and describe the dashboard
-   steps. Do not go looking for a way around it.
-3. **Some things are refused outright and stay refused.** `hh netbird
-   key-create` will not run without a terminal, because the plaintext setup key
-   exists only in that one response. `hh cloudflare get` refuses the endpoints
-   that return a tunnel token. Both would put a live credential into this
-   transcript. Tell the user to run it themselves.
-4. **Never remove the command center's own NetBird peer, or repoint DNS that
+2. **There is no generic write op**, and a few reads are refused outright
+   because their response is a live credential. If what someone wants is not a
+   named op, say so and describe the dashboard steps.
+3. **Never remove the command center's own NetBird peer, or repoint DNS that
    points at this machine, without being very sure.** Both brokers recognise
    these cases and say so - they are how you are reaching everything else.
-5. **Publishing a service through Cloudflare takes two steps**: `tunnel-route`
-   for the ingress rule, then `dns-set` for the CNAME. It is not published
-   after only the first, so do not report that it is.
 
-The netbird-ops and cloudflare-ops skills cover the rest.
+The netbird-ops and cloudflare-ops skills carry the full rules, including the
+two-step Cloudflare publish (`tunnel-route`, then `dns-set`).
 
 Hosts are reached as root by default, so commands run directly - no sudo needed.
 `hh list` shows the connect user per host. Some hosts (notably TrueNAS) may
@@ -150,9 +143,9 @@ it works). Root hosts need none of it.
 When you hit this wall - a privileged command on a non-root host fails with
 `sudo: a password is required`, a permission denied on a root-owned path or the
 Docker socket, or `hh doctor` reports the host has no passwordless sudo - do NOT
-just silently work around it or give up. Tell the user plainly that the host
-connects as a non-root user without passwordless sudo, and give them the one-time
-fix so they can decide:
+silently work around it or give up. Tell the user plainly that the host connects
+as a non-root user without passwordless sudo, and give them the one-time fix so
+they can decide:
 
 - TrueNAS (`truenas_admin`): in the web UI, Credentials -> Users -> select the
   user -> Edit -> set "Allowed sudo commands" AND "Allowed sudo commands (no
@@ -180,20 +173,18 @@ working around the boundary.
 
 ## Know the full surface of each platform
 
-Before troubleshooting a platform, you have a complete capability catalog for it.
-Read the relevant one so you use the whole toolset, not just the basics:
+Every platform has a complete capability catalog under `capabilities/`: what
+the system can do and the exact commands to inspect or manage each subsystem,
+all runnable through `hh run` or the platform's `hh` subcommand. They are not
+loaded up front; read the one for the platform in front of you before
+troubleshooting it, so you use the whole toolset and not just the basics:
 
-@capabilities/proxmox.md
-@capabilities/truenas.md
-@capabilities/linux.md
-@capabilities/routeros.md
-@capabilities/unifi.md
-@capabilities/firewalla.md
-@capabilities/netbird.md
-@capabilities/cloudflare.md
+- `capabilities/proxmox.md`, `capabilities/truenas.md`, `capabilities/linux.md`
+- `capabilities/routeros.md` (MikroTik, and why it needs the same care as the router)
+- `capabilities/unifi.md`, `capabilities/firewalla.md` (read-only)
+- `capabilities/netbird.md`, `capabilities/cloudflare.md`
 
-These describe what each system can do and the exact commands to inspect or
-manage every subsystem, all runnable through hh run.
+Each platform skill names its catalog, so following the skill reads it for you.
 
 ## Live inventory
 
@@ -264,9 +255,8 @@ newer version ships for that same file, it is written beside it as
 `<file>.upstream` and named in the update output for you to merge. Nothing is
 overwritten silently and nothing is deleted.
 
-Even so, the right home for local additions is `CLAUDE.local.md`, imported
-below. It is never touched by an update at all, so it needs no merging, ever.
+Even so, the right home for local additions is `CLAUDE.local.md` beside this
+file. Claude Code loads it on every session, right after this file, with no
+import needed, and an update never touches it, so it needs no merging, ever.
 Put your name, your house rules, and pointers to your own docs there rather than
 editing this file.
-
-@CLAUDE.local.md

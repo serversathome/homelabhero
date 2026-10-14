@@ -19,7 +19,16 @@ covers pools, datasets, disks, apps, and shares (see the truenas-middleware
 skill), and needs no sudo. The raw tools below (zpool, zfs, smartctl, docker) need
 root: if this host connects as `truenas_admin`, prefix them with `sudo -n` (works
 when passwordless sudo is enabled for that user; `hh doctor` shows whether it is,
-and if not, use the midclt equivalent). As root they run bare - see CLAUDE.md.
+and if not, use the midclt equivalent). As root they run bare.
+
+When a raw tool fails with `sudo: a password is required`, or `hh doctor` says
+the host has no passwordless sudo, do not work around it silently: say so, keep
+going through `midclt`, and give the user the one-time fix so they can decide.
+In the TrueNAS web UI: Credentials -> Users -> select `truenas_admin` -> Edit ->
+check "Allow all sudo commands with no password" (so that both "Allowed sudo
+commands" and "Allowed sudo commands (no password)" include all) -> Save. After
+that `hh doctor` shows passwordless sudo available and the raw tools work. The
+alternative is to re-register the host as root, which needs no sudo at all.
 
 For the complete command surface of this platform, read capabilities/truenas.md. For a method that is not documented there, use the truenas-middleware skill to discover it live.
 

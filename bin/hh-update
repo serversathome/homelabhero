@@ -5,8 +5,9 @@
 # runs it directly). One command runs everything, on demand:
 #
 #   1. HomelabHero itself - CLI, skills, CLAUDE.md, capabilities, Node/npm at
-#      latest LTS, the claude/cloudcli packages, and the systemd unit - by pulling
-#      the latest release and re-running the installer non-interactively.
+#      latest LTS, Claude Code (native install) and the cloudcli package, and the
+#      systemd unit - by pulling the latest release and re-running the installer
+#      non-interactively.
 #   2. The OS packages (apt).
 #   3. A health check (hh doctor).
 #

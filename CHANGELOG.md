@@ -24,6 +24,71 @@ easy to get wrong and changes if a date is added to the heading.
 When adding a version, keep the three in sync: the anchor (`v1-1-0`), the git
 tag (`v1.1.0`), and `HH_VERSION` in `bin/hh` (`1.1.0`).
 
+<a id="v1-6-3"></a>
+
+## 1.6.3 (2026-10-14)
+
+Brings the shipped Claude Code configuration in line with Claude Code's
+current documentation (2.1.x): how permission rules are written and anchored,
+what `CLAUDE.md` should carry at launch, and how Claude Code itself is
+installed. No new commands.
+
+### Fixed
+
+- `ops/.claude/settings.json` denied `Read(/etc/homelabhero/vault/**)`, but a
+  rule starting with a single `/` is anchored at the project directory, so it
+  guarded `~hhagent/homelab-ops/etc/homelabhero/vault/`, not the vault. It is
+  now `Read(//etc/homelabhero/vault/**)`, the absolute form. (The vault was
+  never readable by the agent user anyway: that is the OS boundary, and it is
+  unchanged. This fixes the guard rail, not the boundary.)
+- The `hh scan --add` deny rule only matched `--add` as the first argument;
+  `hh scan 10.0.0.0/24 --add` slipped past it. The rule is now
+  `Bash(hh scan *--add*)`. `hh` itself still refuses `--add` without sudo.
+- `CLAUDE.md` imported `CLAUDE.local.md`, which Claude Code already loads on
+  its own beside `CLAUDE.md`, so local notes were in context twice. The import
+  is gone; the file loads exactly as before, once.
+- The deny list spelled `hh update`, `reboot` and `halt` as exact commands,
+  which an argument sidestepped; they take a trailing wildcard now, and
+  `rm -fr` is denied beside `rm -rf`.
+
+### Changed
+
+- **Claude Code is installed with Anthropic's native installer first**, the
+  method its documentation recommends, with the npm package kept only as the
+  fallback when the native installer cannot run. The two ship the same binary.
+  A box installed earlier is moved over on its next `hh update` and the npm
+  copy is removed; `hh doctor` shows which one is running. On every update the
+  installer also runs `claude update` for a native install, so the weekly job
+  keeps Claude current even though the web UI never opens an interactive
+  terminal session.
+- **The eight capability catalogs are no longer imported into `CLAUDE.md`.**
+  Claude Code loads every `@import` at launch, so around a thousand lines of
+  per-platform command reference sat in every session whether the task touched
+  that platform or not, against the documented guidance to keep always-loaded
+  instructions short and move the rest into skills. Each platform skill now
+  names its catalog and reads it when the skill runs (`unifi-ops`,
+  `firewalla-ops`, `network-diag`, `docker-stack-ops` and `homelab-triage` gained
+  the pointer; the other platform skills already had it), and `CLAUDE.md` lists
+  the catalogs and says to read the relevant one. The catalogs themselves are
+  unchanged.
+- `CLAUDE.md` is shorter where a skill already carries the detail: the NetBird
+  and Cloudflare write rules keep the three that matter in every session and
+  defer the rest to `netbird-ops` and `cloudflare-ops`. The passwordless-sudo
+  rule and its exact fix steps stay in `CLAUDE.md`, where 1.0.x put them so
+  Claude can give them the moment it hits the wall; `truenas-ops` and
+  `host-ops` now repeat the step for their platform.
+- Permission rules use the documented trailing-wildcard form, `Bash(hh list *)`
+  rather than the `Bash(hh list)` + `Bash(hh list:*)` pair. A trailing `*`
+  also matches the bare command, so the list halves with no change in what is
+  allowed or denied. The file carries the `$schema` line the docs recommend,
+  so an editor validates it.
+- `docs/security.md` says what the `hh run` prompt depends on now that Claude
+  Code's built-in starting mode is auto: the shipped settings pin Manual mode,
+  the web UI's skip-permissions toggle should stay off, and the deny list is a
+  guard rail enforced in every mode but not a boundary. `docs/updating.md`,
+  `docs/layout.md`, `docs/install.md` and `docs/troubleshooting.md` describe
+  the native install and the local-notes file as they now are.
+
 <a id="v1-6-2"></a>
 
 ## 1.6.2 (2026-10-07)

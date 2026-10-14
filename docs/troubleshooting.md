@@ -90,10 +90,12 @@ Three causes account for nearly every case:
 
 ### Claude is missing, or the UI says the binary is not found
 
-The npm package ships the real binary as a platform-specific optional
-dependency, and on some boxes npm never resolves it: the install reports
-success and leaves a `claude` that cannot run. Since 1.3.0 the installer
-detects this and falls back to Anthropic's native installer, so the fix is:
+Since 1.6.3 the installer uses Anthropic's native installer first (the method
+Claude Code's own docs recommend) and only falls back to the npm package when
+that fails; a box installed earlier is moved over on its next update, and the
+npm copy is removed. The npm package ships the real binary as a
+platform-specific optional dependency that npm sometimes never resolves, which
+is the usual cause of a `claude` that cannot run. The fix is:
 
     hh update
 

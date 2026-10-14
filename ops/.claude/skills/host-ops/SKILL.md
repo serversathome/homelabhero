@@ -11,9 +11,19 @@ description: >
 
 # Host ops (Linux)
 
-Confirm the target with `hh list`, then read capabilities/linux.md for the full
-toolset. Diagnose read-only first, then propose changes and confirm before
-anything state-changing.
+Confirm the target with `hh list`, then read `capabilities/linux.md` for the
+full toolset (it is not loaded up front). Diagnose read-only first, then propose
+changes and confirm before anything state-changing.
+
+Hosts connect as root by default, so commands run bare. On a host registered
+with a non-root user, root-only commands need `sudo -n`, which only works when
+that user has passwordless sudo (`hh doctor` says, per host). When it does not,
+do not work around it silently: say so, and give the user the one-time fix so
+they can decide. From a root shell on that host:
+
+    echo '<user> ALL=(ALL) NOPASSWD: ALL' | sudo tee /etc/sudoers.d/homelabhero-<user>
+
+The alternative is to re-register the host as root, which needs no sudo at all.
 
 ## Fast path
 
