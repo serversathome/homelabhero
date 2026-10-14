@@ -73,9 +73,10 @@ installed. No new commands.
   unchanged.
 - `CLAUDE.md` is shorter where a skill already carries the detail: the NetBird
   and Cloudflare write rules keep the three that matter in every session and
-  defer the rest to `netbird-ops` and `cloudflare-ops`; the step-by-step
-  passwordless-sudo fix moved into `truenas-ops` (the TrueNAS UI path) and
-  `host-ops` (the sudoers line), with the rule itself staying put.
+  defer the rest to `netbird-ops` and `cloudflare-ops`. The passwordless-sudo
+  rule and its exact fix steps stay in `CLAUDE.md`, where 1.0.x put them so
+  Claude can give them the moment it hits the wall; `truenas-ops` and
+  `host-ops` now repeat the step for their platform.
 - Permission rules use the documented trailing-wildcard form, `Bash(hh list *)`
   rather than the `Bash(hh list)` + `Bash(hh list:*)` pair. A trailing `*`
   also matches the bare command, so the list halves with no change in what is

@@ -145,7 +145,17 @@ When you hit this wall - a privileged command on a non-root host fails with
 Docker socket, or `hh doctor` reports the host has no passwordless sudo - do NOT
 silently work around it or give up. Tell the user plainly that the host connects
 as a non-root user without passwordless sudo, and give them the one-time fix so
-they can decide (the truenas-ops and host-ops skills carry the exact steps).
+they can decide:
+
+- TrueNAS (`truenas_admin`): in the web UI, Credentials -> Users -> select the
+  user -> Edit -> set "Allowed sudo commands" AND "Allowed sudo commands (no
+  password)" to include all (check "Allow all sudo commands with no password") ->
+  Save. Then `hh doctor` will show passwordless sudo is available and the raw
+  tools work.
+- Linux / other: from a root shell on that host,
+  `echo '<user> ALL=(ALL) NOPASSWD: ALL' | sudo tee /etc/sudoers.d/homelabhero-<user>`.
+- Or re-register the host as root (no sudo needed at all).
+
 Meanwhile, get what you can through `midclt` (on TrueNAS) so the user is not
 blocked while they decide.
 
