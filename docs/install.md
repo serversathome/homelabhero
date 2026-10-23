@@ -86,6 +86,51 @@ To see which version you are on and what changed between releases:
 [CHANGELOG.md](../CHANGELOG.md) explains every release: what was added, what
 changed, and anything worth knowing before you update.
 
+### Using an API instead of a Claude subscription
+
+The installer signs Claude Code in with a Claude subscription, but it can run
+on an Anthropic API key or any Anthropic-compatible endpoint instead. Claude
+Code applies the `env` block of the agent user's own `~/.claude/settings.json`
+to every session (the web UI, its terminal, and `hh login`), and HomelabHero
+never writes that file, so the setting survives `hh update`. As root on the
+LXC:
+
+    sudo -u hhagent mkdir -p ~hhagent/.claude
+    sudo -u hhagent tee ~hhagent/.claude/settings.json >/dev/null <<'EOF'
+    {
+      "env": {
+        "ANTHROPIC_BASE_URL": "https://your-endpoint.example.com",
+        "ANTHROPIC_AUTH_TOKEN": "your-token",
+        "ANTHROPIC_MODEL": "your-model",
+        "ANTHROPIC_SMALL_FAST_MODEL": "your-model"
+      }
+    }
+    EOF
+    sudo chmod 600 ~hhagent/.claude/settings.json
+    sudo systemctl restart homelab-cc
+
+For a plain Anthropic API key, the `env` block is just
+`"ANTHROPIC_API_KEY": "sk-ant-..."`. If the file already exists, add the
+`env` block to it rather than replacing it. Do this before the installer
+reaches step 9 (or re-run it afterwards) and it skips the sign-in step.
+
+Things to know:
+
+- **OpenAI-compatible servers** (Ollama, vLLM, LM Studio, OpenRouter's OpenAI
+  API) are not Anthropic-compatible on their own. Put a translating proxy such
+  as [LiteLLM](https://docs.litellm.ai/) in front and point
+  `ANTHROPIC_BASE_URL` at the proxy.
+- **The model matters.** The skills, `CLAUDE.md`, and the permission rules are
+  written for and tested with Claude. The credential boundary does not depend
+  on the model (the vault is unreadable by the agent user whatever runs as
+  it), but how well another model follows the skills and sticks to `hh run`
+  is on that model.
+- **The token is readable by the agent user**, the same as the subscription
+  token in `~hhagent/.claude/.credentials.json` is. Use a key you can revoke
+  and, where the provider allows it, cap its spend.
+- To go back to a subscription, remove the `env` entries, restart
+  `homelab-cc`, and run `hh login`.
+
 ## Discovery (point and click)
 
 `hh scan` sweeps your subnet (auto-detected, or pass a CIDR) for live management

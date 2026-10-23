@@ -124,6 +124,11 @@ That starts Claude Code as the agent user from the ops brain; run `/login`
 inside it, then `/exit`. Sign-in state lives in `~hhagent/.claude`, so it
 survives updates.
 
+Running on an API key or another endpoint instead? There is no sign-in; check
+the `env` block in `~hhagent/.claude/settings.json` (see
+[using an API instead of a Claude subscription](install.md#using-an-api-instead-of-a-claude-subscription))
+and restart `homelab-cc` after changing it.
+
 ### "cannot read CLAUDE.md" as hhagent, usually on TrueNAS
 
 A ZFS/NFSv4 ACL inherited from the dataset denies the read even though the mode

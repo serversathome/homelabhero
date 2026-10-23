@@ -24,6 +24,30 @@ easy to get wrong and changes if a date is added to the heading.
 When adding a version, keep the three in sync: the anchor (`v1-1-0`), the git
 tag (`v1.1.0`), and `HH_VERSION` in `bin/hh` (`1.1.0`).
 
+<a id="v1-7-0"></a>
+
+## 1.7.0 (2026-10-23)
+
+HomelabHero can run Claude Code on an Anthropic API key or any
+Anthropic-compatible endpoint instead of a Claude subscription
+([#50](https://github.com/serversathome/homelabhero/issues/50)). No new
+commands.
+
+### Added
+
+- [Using an API instead of a Claude subscription](docs/install.md#using-an-api-instead-of-a-claude-subscription):
+  set `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` and the
+  model in the `env` block of `~hhagent/.claude/settings.json`. Claude Code
+  applies it to every session, and HomelabHero never writes that file, so it
+  survives `hh update`. OpenAI-compatible servers work behind a translating
+  proxy such as LiteLLM.
+
+### Changed
+
+- The installer's sign-in step (9/10) is skipped when that file already sets
+  an API endpoint, key, token or `apiKeyHelper`, instead of offering a
+  subscription sign-in that is not needed.
+
 <a id="v1-6-3"></a>
 
 ## 1.6.3 (2026-10-14)

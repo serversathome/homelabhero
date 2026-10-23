@@ -561,7 +561,13 @@ $SUDO systemctl --no-pager --full status homelab-cc.service | head -n 8 || true
 
 # ---------------------------------------------------------------------------
 say "9/10  Sign Claude in (one time)"
-if $SUDO test -f "${AGENT_HOME}/.claude/.credentials.json" 2>/dev/null; then
+# An API endpoint or key set in the agent's own ~/.claude/settings.json (see
+# "Using an API instead of a Claude subscription" in docs/install.md) replaces
+# the subscription sign-in, so there is nothing to sign in to.
+if $SUDO jq -e '(.env // {} | has("ANTHROPIC_BASE_URL") or has("ANTHROPIC_API_KEY") or has("ANTHROPIC_AUTH_TOKEN")) or has("apiKeyHelper")' \
+     "${AGENT_HOME}/.claude/settings.json" >/dev/null 2>&1; then
+  echo "Claude is set to use an API (${AGENT_HOME}/.claude/settings.json). Skipping sign-in."
+elif $SUDO test -f "${AGENT_HOME}/.claude/.credentials.json" 2>/dev/null; then
   echo "Already signed in. Skipping."
 elif [ "$HH_NONINTERACTIVE" = 1 ]; then
   warn "Not signed in, running non-interactively; skipping. Sign in from the web UI, or run 'hh login'."
